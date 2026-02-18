@@ -8,3 +8,5 @@ authors = ["Devin Droddy <devin@justdeeevin.dev>"]
 repository = "https://github.com/justdeeevin/leche"
 
 [dependencies]
+bitflags = "2.11.0"
+color-eyre = "0.6.5"
