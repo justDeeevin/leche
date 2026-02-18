@@ -1,0 +1,16 @@
+[package]
+name = "leche-parse"
+version.workspace = true
+edition.workspace = true
+description = "Parsing for the leche JVM"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+leche-parse-macros = { version = "25.0.0", path = "./macros" }
+cfg-if.workspace = true
+
+[features]
+default = []
+bitflags = ["leche-parse-macros/bitflags"]

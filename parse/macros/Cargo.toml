@@ -1,0 +1,21 @@
+[package]
+name = "leche-parse-macros"
+version.workspace = true
+edition.workspace = true
+description = "macros for leche-parse"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+syn = { version = "2.0.116", features = ["full", "extra-traits"] }
+quote = "1.0.44"
+proc-macro2 = "1.0.106"
+cfg-if.workspace = true
+num-traits = "0.2.19"
+
+[lib]
+proc-macro = true
+
+[features]
+bitflags = []

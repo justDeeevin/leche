@@ -2,8 +2,9 @@
 #[allow(dead_code)]
 mod class_file;
 
-use class_file::{ClassFile, Parsed};
+use class_file::ClassFile;
 use color_eyre::eyre::OptionExt;
+use leche_parse::Parsed;
 use std::fs::File;
 
 fn main() -> color_eyre::Result<()> {

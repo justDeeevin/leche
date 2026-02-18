@@ -162,21 +162,12 @@ pub struct LocalVariableType {
     index: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 pub struct LineNumber {
     /// Index of the first instruction of the line in the code array.
     start_pc: usize,
     // TODO: should this be usize?
     line_number: u2,
-}
-
-impl Parsed for LineNumber {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        Ok(Self {
-            start_pc: usize::parse(&mut reader)?,
-            line_number: u2::parse(&mut reader)?,
-        })
-    }
 }
 
 impl attribute_info {
@@ -303,59 +294,33 @@ impl attribute_info {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 pub struct InnerClass {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing the
     /// inner class.
+    #[map(|i| i - 1)]
     inner_class_info_index: usize,
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing the outer
     /// class, if any.
     ///
     /// Must be `None` if anonymous for ^v51.0.
+    #[map(|o| o.map(|i| i - 1))]
     outer_class_info_index: Option<usize>,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the simple
     /// name of the inner class.
     ///
     /// `None` if anonymous.
+    #[map(|o| o.map(|i| i - 1))]
     inner_name_index: Option<usize>,
     inner_class_access_flags: InnerClassAccessFlags,
 }
 
-impl Parsed for InnerClass {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut u2 = [0; 2];
-
-        reader.read_exact(&mut u2)?;
-        let inner_class_info_index = u2::from_be_bytes(u2) as usize - 1;
-
-        reader.read_exact(&mut u2)?;
-        let outer_class_info_index = if u2::from_be_bytes(u2) == 0 {
-            None
-        } else {
-            Some(u2::from_be_bytes(u2) as usize - 1)
-        };
-
-        reader.read_exact(&mut u2)?;
-        let inner_name_index = if u2::from_be_bytes(u2) == 0 {
-            None
-        } else {
-            Some(u2::from_be_bytes(u2) as usize - 1)
-        };
-
-        let inner_class_access_flags = InnerClassAccessFlags::parse(&mut reader)?;
-
-        Ok(Self {
-            inner_class_info_index,
-            outer_class_info_index,
-            inner_name_index,
-            inner_class_access_flags,
-        })
-    }
-}
+#[derive(Debug, Parsed)]
+#[bitflags]
+struct InnerClassAccessFlags(u2);
 
 bitflags! {
-    #[derive(Debug)]
-    struct InnerClassAccessFlags: u2 {
+    impl InnerClassAccessFlags: u2 {
         const ACC_PUBLIC = 0x0001;
         const ACC_PRIVATE = 0x0002;
         const ACC_PROTECTED = 0x0004;
@@ -366,19 +331,6 @@ bitflags! {
         const ACC_SYNTHETIC = 0x1000;
         const ACC_ANNOTATION = 0x2000;
         const ACC_ENUM = 0x4000;
-    }
-}
-
-impl Parsed for InnerClassAccessFlags {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        let mut u2 = [0; 2];
-        reader.read_exact(&mut u2)?;
-        InnerClassAccessFlags::from_bits(u2::from_be_bytes(u2)).ok_or(Error::new(
-            ErrorKind::InvalidData,
-            "invalid inner class access_flags",
-        ))
     }
 }
 
@@ -468,7 +420,7 @@ enum stack_map_frame_info {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 enum verification_type_info {
     Top,
     Integer,
@@ -480,6 +432,7 @@ enum verification_type_info {
     Object {
         /// Index into the constant pool at which a [`cp_info::Class`] is found representing the
         /// class of the object.
+        #[map(|i| i - 1)]
         cpool_index: usize,
     },
     Uninitialized {
@@ -488,35 +441,7 @@ enum verification_type_info {
     },
 }
 
-impl Parsed for verification_type_info {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        let tag = u1::parse(&mut reader)?;
-
-        match tag {
-            0 => Ok(Self::Top),
-            1 => Ok(Self::Integer),
-            2 => Ok(Self::Float),
-            3 => Ok(Self::Double),
-            4 => Ok(Self::Long),
-            5 => Ok(Self::Null),
-            6 => Ok(Self::UninitializedThis),
-            7 => Ok(Self::Object {
-                cpool_index: usize::parse(&mut reader)? - 1,
-            }),
-            8 => Ok(Self::Uninitialized {
-                offset: u2::parse(&mut reader)?,
-            }),
-            _ => Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid verification type tag: {tag}"),
-            )),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 pub struct ExceptionHandler {
     /// Range of indices in the code array in which the exception handler is active.
     ///
@@ -530,35 +455,6 @@ pub struct ExceptionHandler {
     /// exception type.
     ///
     /// If `None`, the exception handler catches all exceptions.
+    #[map(|o| o.map(|i| i - 1))]
     catch_type: Option<usize>,
-}
-
-impl Parsed for ExceptionHandler {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut u2 = [0; 2];
-
-        reader.read_exact(&mut u2)?;
-        let start_pc = u2::from_be_bytes(u2) as usize;
-
-        reader.read_exact(&mut u2)?;
-        let end_pc = u2::from_be_bytes(u2) as usize;
-
-        let active = start_pc..end_pc;
-
-        reader.read_exact(&mut u2)?;
-        let handler_pc = u2::from_be_bytes(u2);
-
-        reader.read_exact(&mut u2)?;
-        let catch_type = if u2::from_be_bytes(u2) == 0 {
-            None
-        } else {
-            Some(u2::from_be_bytes(u2) as usize - 1)
-        };
-
-        Ok(Self {
-            active,
-            handler_pc,
-            catch_type,
-        })
-    }
 }

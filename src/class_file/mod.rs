@@ -2,6 +2,7 @@ mod attributes;
 
 use attributes::attribute_info;
 use bitflags::bitflags;
+use leche_parse::Parsed;
 use std::{io::Read, rc::Rc};
 
 type u1 = u8;
@@ -9,40 +10,6 @@ type u2 = u16;
 type u4 = u32;
 
 const MAGIC: u4 = 0xCAFEBABE;
-
-pub trait Parsed: Sized {
-    fn parse(reader: impl Read) -> std::io::Result<Self>;
-}
-
-impl Parsed for u1 {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut u1 = [0; 1];
-        reader.read_exact(&mut u1)?;
-        Ok(u1[0])
-    }
-}
-
-impl Parsed for u2 {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut u2 = [0; 2];
-        reader.read_exact(&mut u2)?;
-        Ok(u2::from_be_bytes(u2))
-    }
-}
-
-impl Parsed for u4 {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut u4 = [0; 4];
-        reader.read_exact(&mut u4)?;
-        Ok(u4::from_be_bytes(u4))
-    }
-}
-
-impl Parsed for usize {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        Ok(u2::parse(&mut reader)? as usize)
-    }
-}
 
 #[derive(Debug)]
 pub struct ClassFile {
@@ -210,9 +177,12 @@ impl ClassFile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Parsed)]
+#[bitflags]
+pub struct ClassAccessFlags(u2);
+
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct ClassAccessFlags: u2 {
+    impl ClassAccessFlags: u2 {
         /// Declared public; may be accessed from outside its package.
         const ACC_PUBLIC = 0x0001;
 
@@ -254,19 +224,6 @@ bitflags! {
 
         /// Is a module, not a class or interface.
         const ACC_MODULE = 0x8000;
-    }
-}
-
-impl Parsed for ClassAccessFlags {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        let mut u2 = [0; 2];
-        reader.read_exact(&mut u2)?;
-        ClassAccessFlags::from_bits(u2::from_be_bytes(u2)).ok_or(Error::new(
-            ErrorKind::InvalidData,
-            "invalid class access_flags",
-        ))
     }
 }
 
@@ -515,7 +472,8 @@ impl<T> Iterator for OneOrTwoIter<T> {
 /// method must not be `<init>` or `<clinit>`.
 ///
 /// For `NewInvokeSpecial`, the name of the method must be `<init>`.
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
+#[repr(u8)]
 pub enum ReferenceKind {
     GetField = 1,
     GetStatic,
@@ -528,75 +486,29 @@ pub enum ReferenceKind {
     InvokeInterface,
 }
 
-impl Parsed for ReferenceKind {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        let mut tag = [0; 1];
-        reader.read_exact(&mut tag)?;
-
-        match tag[0] {
-            1 => Ok(Self::GetField),
-            2 => Ok(Self::GetStatic),
-            3 => Ok(Self::PutField),
-            4 => Ok(Self::PutStatic),
-            5 => Ok(Self::InvokeVirtual),
-            6 => Ok(Self::InvokeStatic),
-            7 => Ok(Self::InvokeSpecial),
-            8 => Ok(Self::NewInvokeSpecial),
-            9 => Ok(Self::InvokeInterface),
-            tag => Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid reference kind: {tag}"),
-            )),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 pub struct RefInfo {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing a class or
     /// interface type of which the reference is a member.
+    #[map(|i| i - 1)]
     class_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the reference.
+    #[map(|i| i - 1)]
     name_and_type_index: usize,
 }
 
-impl Parsed for RefInfo {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        let mut index = [0; 2];
-        reader.read_exact(&mut index)?;
-        let class_index = u2::from_be_bytes(index) as usize - 1;
-
-        reader.read_exact(&mut index)?;
-        let name_and_type_index = u2::from_be_bytes(index) as usize - 1;
-
-        Ok(Self {
-            class_index,
-            name_and_type_index,
-        })
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Parsed)]
 pub struct DynamicInfo {
     /// Index into the `bootstrap_methods` array of the bootstrap method table of this class file.
     ///
     /// This can be used for self-reference, which will cause a failure at the time of resolution.
+    #[map(|i| i - 1)]
     bootstrap_method_attr_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the method.
+    #[map(|i| i - 1)]
     name_and_type_index: usize,
-}
-
-impl Parsed for DynamicInfo {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        Ok(Self {
-            bootstrap_method_attr_index: usize::parse(&mut reader)? - 1,
-            name_and_type_index: usize::parse(&mut reader)? - 1,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -613,9 +525,12 @@ pub struct field_info {
     attributes: Rc<[attribute_info]>,
 }
 
+#[derive(Debug, Parsed)]
+#[bitflags]
+struct MemberAccessFlags(u2);
+
 bitflags! {
-    #[derive(Debug)]
-    struct MemberAccessFlags: u2 {
+    impl MemberAccessFlags: u2 {
         const ACC_PUBLIC = 0x0001;
         const ACC_PRIVATE = 0x0002;
         const ACC_PROTECTED = 0x0004;
@@ -627,18 +542,5 @@ bitflags! {
         const ACC_TRANSIENT = 0x0080;
         const ACC_SYNTHETIC = 0x1000;
         const ACC_ENUM = 0x4000;
-    }
-}
-
-impl Parsed for MemberAccessFlags {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        let mut u2 = [0; 2];
-        reader.read_exact(&mut u2)?;
-        MemberAccessFlags::from_bits(u2::from_be_bytes(u2)).ok_or(Error::new(
-            ErrorKind::InvalidData,
-            "invalid member access_flags",
-        ))
     }
 }

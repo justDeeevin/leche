@@ -1,12 +1,26 @@
 [package]
 name = "leche"
-version = "25.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Java SE 25 bytecode interpreter"
-license = "MIT"
-authors = ["Devin Droddy <devin@justdeeevin.dev>"]
-repository = "https://github.com/justdeeevin/leche"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 bitflags = "2.11.0"
 color-eyre = "0.6.5"
+leche-parse = { version = "25.0.0", path = "parse", features = ["bitflags"] }
+
+[workspace]
+members = ["parse", "parse/macros"]
+
+[workspace.package]
+version = "25.0.0"
+edition = "2024"
+license = "MIT"
+authors = ["Devin Droddy <devin@justdeeevin.dev>"]
+repository = "https://github.com/justdeeevin/leche"
+
+[workspace.dependencies]
+cfg-if = "1.0.4"
