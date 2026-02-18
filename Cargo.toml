@@ -1,0 +1,10 @@
+[package]
+name = "leche"
+version = "25.0.0"
+edition = "2024"
+description = "Java SE 25 bytecode interpreter"
+license = "MIT"
+authors = ["Devin Droddy <devin@justdeeevin.dev>"]
+repository = "https://github.com/justdeeevin/leche"
+
+[dependencies]
