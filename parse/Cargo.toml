@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 leche-parse-macros = { version = "25.0.0", path = "./macros" }
 cfg-if.workspace = true
+num-traits.workspace = true
 
 [features]
 default = []

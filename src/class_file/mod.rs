@@ -1,6 +1,6 @@
 mod attributes;
 
-use attributes::attribute_info;
+use attributes::FieldAttribute;
 use bitflags::bitflags;
 use leche_parse::Parsed;
 use std::{io::Read, rc::Rc};
@@ -9,7 +9,11 @@ type u1 = u8;
 type u2 = u16;
 type u4 = u32;
 
-const MAGIC: u4 = 0xCAFEBABE;
+const MAGIC_NUMBER: u4 = 0xCAFEBABE;
+
+const fn minus_one(i: usize) -> usize {
+    i - 1
+}
 
 #[derive(Debug)]
 pub struct ClassFile {
@@ -36,14 +40,14 @@ pub struct ClassFile {
 }
 
 impl Parsed for ClassFile {
-    fn parse(mut reader: impl Read) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         use std::io::{Error, ErrorKind};
 
         let mut u4 = [0; 4];
         let mut u2 = [0; 2];
 
         reader.read_exact(&mut u4)?;
-        if u4::from_be_bytes(u4) != MAGIC {
+        if u4::from_be_bytes(u4) != MAGIC_NUMBER {
             return Err(Error::new(ErrorKind::InvalidData, "invalid magic number"));
         }
 
@@ -60,7 +64,7 @@ impl Parsed for ClassFile {
             ));
         }
 
-        if major_version >= 56 && minor_version != 0 && minor_version != 65535 {
+        if major_version >= 56 && minor_version != 0 && minor_version != u2::MAX {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!("invalid minor version: {minor_version}"),
@@ -70,21 +74,21 @@ impl Parsed for ClassFile {
         reader.read_exact(&mut u2)?;
 
         let constant_pool = (0..(u2::from_be_bytes(u2) - 1))
-            .flat_map(|_| cp_info::parse(&mut reader))
+            .flat_map(|_| cp_info::parse(reader))
             .collect::<Result<Rc<_>, _>>()?;
 
-        let access_flags = ClassAccessFlags::parse(&mut reader)?;
+        let access_flags = ClassAccessFlags::parse(reader)?;
 
-        let this_class = usize::parse(&mut reader)? - 1;
+        let this_class = usize::parse(reader)? - 1;
 
-        let super_class = usize::parse(&mut reader)?;
+        let super_class = usize::parse(reader)?;
 
-        let interfaces = (0..u2::parse(&mut reader)?)
-            .map(|_| usize::parse(&mut reader).map(|i| i - 1))
+        let interfaces = (0..u2::parse(reader)?)
+            .map(|_| usize::parse(reader).map(minus_one))
             .collect::<Result<_, _>>()?;
 
-        let fields = (0..u2::parse(&mut reader)?)
-            .map(|_| Self::parse_field(&mut reader, &constant_pool))
+        let fields = (0..u2::parse(reader)?)
+            .map(|_| Self::parse_field(reader, &constant_pool))
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
@@ -106,7 +110,7 @@ impl Parsed for ClassFile {
 
 impl ClassFile {
     fn uses_preview_features(&self) -> bool {
-        self.minor_version == 65535
+        self.minor_version == u2::MAX
     }
 
     fn is_constant_valid(&self, constant: cp_info) -> bool {
@@ -151,12 +155,12 @@ impl ClassFile {
     }
 
     fn parse_field(
-        mut reader: impl Read,
+        reader: &mut impl Read,
         constant_pool: &[cp_info],
     ) -> std::io::Result<field_info> {
         let mut u2 = [0; 2];
 
-        let access_flags = MemberAccessFlags::parse(&mut reader)?;
+        let access_flags = MemberAccessFlags::parse(reader)?;
 
         reader.read_exact(&mut u2)?;
         let name_index = u2::from_be_bytes(u2) as usize - 1;
@@ -164,8 +168,8 @@ impl ClassFile {
         reader.read_exact(&mut u2)?;
         let descriptor_index = u2::from_be_bytes(u2) as usize - 1;
 
-        let attributes = (0..u2::parse(&mut reader)?)
-            .map(|_| attribute_info::parse(&mut reader, constant_pool))
+        let attributes = (0..u2::parse(reader)?)
+            .map(|_| FieldAttribute::parse(reader, constant_pool))
             .collect::<Result<_, _>>()?;
 
         Ok(field_info {
@@ -304,7 +308,7 @@ pub enum cp_info {
 }
 
 impl cp_info {
-    pub fn parse(reader: impl Read) -> OneOrTwo<std::io::Result<Self>> {
+    pub fn parse(reader: &mut impl Read) -> OneOrTwo<std::io::Result<Self>> {
         match Self::parse_inner(reader) {
             Ok(OneOrTwo::One(value)) => OneOrTwo::One(Ok(value)),
             Ok(OneOrTwo::Two(value1, value2)) => OneOrTwo::Two(Ok(value1), Ok(value2)),
@@ -312,7 +316,7 @@ impl cp_info {
         }
     }
 
-    fn parse_inner(mut reader: impl Read) -> std::io::Result<OneOrTwo<Self>> {
+    fn parse_inner(reader: &mut impl Read) -> std::io::Result<OneOrTwo<Self>> {
         use std::io::{Error, ErrorKind};
 
         let mut tag = [0; 1];
@@ -320,9 +324,9 @@ impl cp_info {
 
         match tag[0] {
             1 => {
-                let len = usize::parse(&mut reader)?;
+                let len = usize::parse(reader)?;
                 Ok(OneOrTwo::One(Self::Utf8(
-                    std::io::read_to_string((&mut reader).take(len as u64))?.into(),
+                    std::io::read_to_string((reader).take(len as u64))?.into(),
                 )))
             }
             3 => {
@@ -353,15 +357,15 @@ impl cp_info {
                 ))
             }
             7 => Ok(OneOrTwo::One(Self::Class {
-                name_index: usize::parse(&mut reader)? - 1,
+                name_index: usize::parse(reader)? - 1,
             })),
             8 => Ok(OneOrTwo::One(Self::String {
-                string_index: usize::parse(&mut reader)? - 1,
+                string_index: usize::parse(reader)? - 1,
             })),
-            9 => Ok(OneOrTwo::One(Self::Fieldref(RefInfo::parse(&mut reader)?))),
-            10 => Ok(OneOrTwo::One(Self::Methodref(RefInfo::parse(&mut reader)?))),
+            9 => Ok(OneOrTwo::One(Self::Fieldref(RefInfo::parse(reader)?))),
+            10 => Ok(OneOrTwo::One(Self::Methodref(RefInfo::parse(reader)?))),
             11 => Ok(OneOrTwo::One(Self::InterfaceMethodref(RefInfo::parse(
-                &mut reader,
+                reader,
             )?))),
             12 => {
                 let mut u2 = [0; 2];
@@ -378,23 +382,21 @@ impl cp_info {
                 }))
             }
             15 => Ok(OneOrTwo::One(Self::MethodHandle {
-                reference_kind: ReferenceKind::parse(&mut reader)?,
-                reference_index: usize::parse(&mut reader)? - 1,
+                reference_kind: ReferenceKind::parse(reader)?,
+                reference_index: usize::parse(reader)? - 1,
             })),
             16 => Ok(OneOrTwo::One(Self::MethodType {
-                descriptor_index: usize::parse(&mut reader)? - 1,
+                descriptor_index: usize::parse(reader)? - 1,
             })),
-            17 => Ok(OneOrTwo::One(Self::Dynamic(DynamicInfo::parse(
-                &mut reader,
-            )?))),
+            17 => Ok(OneOrTwo::One(Self::Dynamic(DynamicInfo::parse(reader)?))),
             18 => Ok(OneOrTwo::One(Self::InvokeDynamic(DynamicInfo::parse(
-                &mut reader,
+                reader,
             )?))),
             19 => Ok(OneOrTwo::One(Self::Module {
-                name_index: usize::parse(&mut reader)? - 1,
+                name_index: usize::parse(reader)? - 1,
             })),
             20 => Ok(OneOrTwo::One(Self::Package {
-                name_index: usize::parse(&mut reader)? - 1,
+                name_index: usize::parse(reader)? - 1,
             })),
             tag => Err(Error::new(
                 ErrorKind::InvalidData,
@@ -404,6 +406,7 @@ impl cp_info {
     }
 }
 
+#[derive(Debug)]
 pub enum OneOrTwo<T> {
     One(T),
     Two(T, T),
@@ -490,11 +493,11 @@ pub enum ReferenceKind {
 pub struct RefInfo {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing a class or
     /// interface type of which the reference is a member.
-    #[map(|i| i - 1)]
+    #[map(minus_one)]
     class_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the reference.
-    #[map(|i| i - 1)]
+    #[map(minus_one)]
     name_and_type_index: usize,
 }
 
@@ -503,11 +506,10 @@ pub struct DynamicInfo {
     /// Index into the `bootstrap_methods` array of the bootstrap method table of this class file.
     ///
     /// This can be used for self-reference, which will cause a failure at the time of resolution.
-    #[map(|i| i - 1)]
     bootstrap_method_attr_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the method.
-    #[map(|i| i - 1)]
+    #[map(minus_one)]
     name_and_type_index: usize,
 }
 
@@ -522,7 +524,7 @@ pub struct field_info {
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a field
     /// descriptor.
     descriptor_index: usize,
-    attributes: Rc<[attribute_info]>,
+    attributes: Rc<[FieldAttribute]>,
 }
 
 #[derive(Debug, Parsed)]

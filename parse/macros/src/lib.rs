@@ -1,10 +1,10 @@
 use num_traits::One;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::quote;
+use quote::{ToTokens, quote};
 use std::{ops::Add, str::FromStr};
 use syn::{
-    Data, DataEnum, Error, Expr, ExprClosure, ExprLit, Field, Fields, FieldsNamed, FieldsUnnamed,
+    Data, DataEnum, Error, Expr, ExprLit, Field, Fields, FieldsNamed, FieldsUnnamed, GenericParam,
     Ident, Lit, LitInt, Pat, PatLit, PatRange, Path, RangeLimits, Result, parse::Parse,
     parse_quote,
 };
@@ -14,6 +14,26 @@ pub fn parsed(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
 
     let name = input.ident;
+    let lt = input.generics.lt_token;
+    let generic_params_with_bounds = input.generics.params;
+    let gt = input.generics.gt_token;
+    let generic_params_with_bounds_delimited = quote!(#lt #generic_params_with_bounds #gt);
+    let generic_params = generic_params_with_bounds.iter().map(|p| match p {
+        GenericParam::Type(t) => t.ident.to_token_stream(),
+        GenericParam::Lifetime(l) => l.lifetime.to_token_stream(),
+        GenericParam::Const(c) => c.ident.to_token_stream(),
+    });
+    let generic_params_delimited = quote!(#lt #(#generic_params),* #gt);
+
+    let where_clause = generic_params_with_bounds
+        .iter()
+        .filter_map(|p| match p {
+            GenericParam::Type(t) => Some(&t.ident),
+            _ => None,
+        })
+        .map(|t| parse_quote!(#t: ::leche_parse::Parsed))
+        .chain(input.generics.where_clause.map(|w| w.predicates))
+        .collect::<Vec<_>>();
 
     let out = match input.data {
         Data::Struct(s) => {
@@ -57,8 +77,11 @@ pub fn parsed(input: TokenStream) -> TokenStream {
 
     quote! {
         #[automatically_derived]
-        impl ::leche_parse::Parsed for #name {
-            fn parse(mut reader: impl ::std::io::Read) -> ::std::io::Result<Self> {
+        impl #generic_params_with_bounds_delimited ::leche_parse::Parsed for #name #generic_params_delimited
+           where
+               #(#where_clause,)*
+        {
+            fn parse(reader: &mut impl ::std::io::Read) -> ::std::io::Result<Self> {
                 #body
             }
         }
@@ -85,7 +108,7 @@ fn derive_named_fields(fields: &FieldsNamed, parent: Path) -> Result<TokenStream
 
     Ok(quote! {
         Ok(#parent {#(
-            #names: <#types as ::leche_parse::Parsed>::parse(&mut reader)#maps?
+            #names: <#types as ::leche_parse::Parsed>::parse(reader)#maps?
         ),*})
     }
     .into())
@@ -99,7 +122,7 @@ fn get_maps<'a>(
         .map(|f| {
             f.attrs.iter().find_map(|a| {
                 a.path().is_ident("map").then(|| {
-                    a.parse_args_with(ExprClosure::parse)
+                    a.parse_args_with(Expr::parse)
                         .map(|closure| quote!(.map(#closure)))
                 })
             })
@@ -114,7 +137,7 @@ fn derive_unnamed_fields(fields: &FieldsUnnamed, parent: Path) -> Result<TokenSt
 
     Ok(quote! {
         Ok(#parent(#(
-            <#types as ::leche_parse::Parsed>::parse(&mut reader)#maps?,
+            <#types as ::leche_parse::Parsed>::parse(reader)#maps?,
         ),*))
     }
     .into())
@@ -215,7 +238,7 @@ fn derive_enum(e: DataEnum, name: &Ident, mut repr: Option<Ident>) -> Result<Tok
     let tag_type = repr.unwrap_or(parse_quote!(isize));
 
     Ok(quote! {
-        match <#tag_type as ::leche_parse::Parsed>::parse(&mut reader)? {
+        match <#tag_type as ::leche_parse::Parsed>::parse(reader)? {
             #(
                 #tags => #variants,
             )*

@@ -120,6 +120,7 @@ version = "25.0.0"
 dependencies = [
  "cfg-if",
  "leche-parse-macros",
+ "num-traits",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ use std::fs::File;
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let class = ClassFile::parse(File::open(
+    let class = ClassFile::parse(&mut File::open(
         std::env::args()
             .nth(1)
             .ok_or_eyre("No class file provided")?,
@@ -23,7 +23,9 @@ fn main() -> color_eyre::Result<()> {
         }
     })?;
 
-    dbg!(class);
+    dbg!(&class);
+
+    dbg!(&class.constant_pool[17]);
 
     Ok(())
 }
