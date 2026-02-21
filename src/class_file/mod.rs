@@ -1,6 +1,6 @@
 mod attributes;
 
-use attributes::FieldAttribute;
+use attributes::{ClassAttribute, FieldAttribute, MethodAttribute};
 use bitflags::bitflags;
 use leche_parse::Parsed;
 use std::{io::Read, rc::Rc};
@@ -37,25 +37,21 @@ pub struct ClassFile {
     /// interfaces implemented by this class.
     pub interfaces: Rc<[usize]>,
     pub fields: Rc<[field_info]>,
+    pub methods: Rc<[method_info]>,
+    pub attributes: Rc<[ClassAttribute]>,
 }
 
 impl Parsed for ClassFile {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         use std::io::{Error, ErrorKind};
 
-        let mut u4 = [0; 4];
-        let mut u2 = [0; 2];
-
-        reader.read_exact(&mut u4)?;
-        if u4::from_be_bytes(u4) != MAGIC_NUMBER {
+        if u4::parse(reader)? != MAGIC_NUMBER {
             return Err(Error::new(ErrorKind::InvalidData, "invalid magic number"));
         }
 
-        reader.read_exact(&mut u2)?;
-        let minor_version = u2::from_be_bytes(u2);
+        let minor_version = u2::parse(reader)?;
 
-        reader.read_exact(&mut u2)?;
-        let major_version = u2::from_be_bytes(u2);
+        let major_version = u2::parse(reader)?;
 
         if !(45..=69).contains(&major_version) {
             return Err(Error::new(
@@ -71,9 +67,7 @@ impl Parsed for ClassFile {
             ));
         }
 
-        reader.read_exact(&mut u2)?;
-
-        let constant_pool = (0..(u2::from_be_bytes(u2) - 1))
+        let constant_pool = (0..(u2::parse(reader)? - 1))
             .flat_map(|_| cp_info::parse(reader))
             .collect::<Result<Rc<_>, _>>()?;
 
@@ -81,14 +75,22 @@ impl Parsed for ClassFile {
 
         let this_class = usize::parse(reader)? - 1;
 
-        let super_class = usize::parse(reader)?;
+        let super_class = Option::parse(reader)?.map(minus_one);
 
         let interfaces = (0..u2::parse(reader)?)
             .map(|_| usize::parse(reader).map(minus_one))
             .collect::<Result<_, _>>()?;
 
         let fields = (0..u2::parse(reader)?)
-            .map(|_| Self::parse_field(reader, &constant_pool))
+            .map(|_| field_info::parse(reader, &constant_pool))
+            .collect::<Result<_, _>>()?;
+
+        let methods = (0..u2::parse(reader)?)
+            .map(|_| method_info::parse(reader, &constant_pool))
+            .collect::<Result<_, _>>()?;
+
+        let attributes = (0..u2::parse(reader)?)
+            .map(|_| ClassAttribute::parse(reader, &constant_pool))
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
@@ -97,13 +99,11 @@ impl Parsed for ClassFile {
             constant_pool,
             access_flags,
             this_class,
-            super_class: if super_class == 0 {
-                None
-            } else {
-                Some(super_class - 1)
-            },
+            super_class,
             interfaces,
             fields,
+            methods,
+            attributes,
         })
     }
 }
@@ -152,32 +152,6 @@ impl ClassFile {
             Class { .. } => self.major_version >= 49,
             _ => false,
         }
-    }
-
-    fn parse_field(
-        reader: &mut impl Read,
-        constant_pool: &[cp_info],
-    ) -> std::io::Result<field_info> {
-        let mut u2 = [0; 2];
-
-        let access_flags = MemberAccessFlags::parse(reader)?;
-
-        reader.read_exact(&mut u2)?;
-        let name_index = u2::from_be_bytes(u2) as usize - 1;
-
-        reader.read_exact(&mut u2)?;
-        let descriptor_index = u2::from_be_bytes(u2) as usize - 1;
-
-        let attributes = (0..u2::parse(reader)?)
-            .map(|_| FieldAttribute::parse(reader, constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        Ok(field_info {
-            access_flags,
-            name_index,
-            descriptor_index,
-            attributes,
-        })
     }
 }
 
@@ -319,43 +293,24 @@ impl cp_info {
     fn parse_inner(reader: &mut impl Read) -> std::io::Result<OneOrTwo<Self>> {
         use std::io::{Error, ErrorKind};
 
-        let mut tag = [0; 1];
-        reader.read_exact(&mut tag)?;
-
-        match tag[0] {
+        match u1::parse(reader)? {
             1 => {
                 let len = usize::parse(reader)?;
                 Ok(OneOrTwo::One(Self::Utf8(
                     std::io::read_to_string((reader).take(len as u64))?.into(),
                 )))
             }
-            3 => {
-                let mut int = [0; 4];
-                reader.read_exact(&mut int)?;
-                Ok(OneOrTwo::One(Self::Integer(u32::from_be_bytes(int))))
-            }
-            4 => {
-                let mut float = [0; 4];
-                reader.read_exact(&mut float)?;
-                Ok(OneOrTwo::One(Self::Float(f32::from_be_bytes(float))))
-            }
+            3 => Ok(OneOrTwo::One(Self::Integer(u32::parse(reader)?))),
+            4 => Ok(OneOrTwo::One(Self::Float(f32::parse(reader)?))),
             // TODO: test 8-byte parsing
-            5 => {
-                let mut long = [0; 8];
-                reader.read_exact(&mut long)?;
-                Ok(OneOrTwo::Two(
-                    Self::Long(u64::from_be_bytes(long)),
-                    Self::SecondHalf,
-                ))
-            }
-            6 => {
-                let mut double = [0; 8];
-                reader.read_exact(&mut double)?;
-                Ok(OneOrTwo::Two(
-                    Self::Double(f64::from_be_bytes(double)),
-                    Self::SecondHalf,
-                ))
-            }
+            5 => Ok(OneOrTwo::Two(
+                Self::Long(u64::parse(reader)?),
+                Self::SecondHalf,
+            )),
+            6 => Ok(OneOrTwo::Two(
+                Self::Double(f64::parse(reader)?),
+                Self::SecondHalf,
+            )),
             7 => Ok(OneOrTwo::One(Self::Class {
                 name_index: usize::parse(reader)? - 1,
             })),
@@ -367,20 +322,10 @@ impl cp_info {
             11 => Ok(OneOrTwo::One(Self::InterfaceMethodref(RefInfo::parse(
                 reader,
             )?))),
-            12 => {
-                let mut u2 = [0; 2];
-
-                reader.read_exact(&mut u2)?;
-                let name_index = u2::from_be_bytes(u2) as usize - 1;
-
-                reader.read_exact(&mut u2)?;
-                let descriptor_index = u2::from_be_bytes(u2) as usize - 1;
-
-                Ok(OneOrTwo::One(Self::NameAndType {
-                    name_index,
-                    descriptor_index,
-                }))
-            }
+            12 => Ok(OneOrTwo::One(Self::NameAndType {
+                name_index: usize::parse(reader)? - 1,
+                descriptor_index: usize::parse(reader)? - 1,
+            })),
             15 => Ok(OneOrTwo::One(Self::MethodHandle {
                 reference_kind: ReferenceKind::parse(reader)?,
                 reference_index: usize::parse(reader)? - 1,
@@ -513,23 +458,57 @@ pub struct DynamicInfo {
     name_and_type_index: usize,
 }
 
+trait ParsedWithString: Sized {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self>;
+}
+
 #[derive(Debug)]
-pub struct field_info {
-    access_flags: MemberAccessFlags,
+pub struct member_info<AccessFlags, Attributes> {
+    pub access_flags: AccessFlags,
+    pub name_index: usize,
+    pub descriptor_index: usize,
+    pub attributes: Rc<[Attributes]>,
+}
 
-    /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing an
-    /// unqualified field name.
-    name_index: usize,
+impl<F: Parsed, A: ParsedWithString> ParsedWithString for member_info<F, A> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+        Ok(Self {
+            access_flags: Parsed::parse(reader)?,
+            name_index: usize::parse(reader)? - 1,
+            descriptor_index: usize::parse(reader)? - 1,
+            attributes: (0..u2::parse(reader)?)
+                .map(|_| A::parse(reader, constant_pool))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
 
-    /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a field
-    /// descriptor.
-    descriptor_index: usize,
-    attributes: Rc<[FieldAttribute]>,
+pub type field_info = member_info<MemberAccessFlags, FieldAttribute>;
+pub type method_info = member_info<MethodAccessFlags, MethodAttribute>;
+
+#[derive(Debug, Parsed)]
+pub struct MethodAccessFlags(u2);
+
+bitflags! {
+    impl MethodAccessFlags: u2 {
+        const ACC_PUBLIC = 0x0001;
+        const ACC_PRIVATE = 0x0002;
+        const ACC_PROTECTED = 0x0004;
+        const ACC_STATIC = 0x0008;
+        const ACC_FINAL = 0x0010;
+        const ACC_SYNCHRONIZED = 0x0020;
+        const ACC_BRIDGE = 0x0040;
+        const ACC_VARARGS = 0x0080;
+        const ACC_NATIVE = 0x0100;
+        const ACC_ABSTRACT = 0x0400;
+        const ACC_STRICT = 0x0800;
+        const ACC_SYNTHETIC = 0x1000;
+    }
 }
 
 #[derive(Debug, Parsed)]
 #[bitflags]
-struct MemberAccessFlags(u2);
+pub struct MemberAccessFlags(u2);
 
 bitflags! {
     impl MemberAccessFlags: u2 {

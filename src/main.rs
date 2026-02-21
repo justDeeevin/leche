@@ -25,7 +25,5 @@ fn main() -> color_eyre::Result<()> {
 
     dbg!(&class);
 
-    dbg!(&class.constant_pool[17]);
-
     Ok(())
 }

@@ -22,7 +22,7 @@ macro_rules! impl_parsed {
     }
 }
 
-impl_parsed!(i8: 1, i16: 2, i32: 4, i64: 8, i128: 16, u8: 1, u16: 2, u32: 4, u64: 8, u128: 16);
+impl_parsed!(i8: 1, i16: 2, i32: 4, i64: 8, i128: 16, u8: 1, u16: 2, u32: 4, u64: 8, u128: 16, f32: 4, f64: 8);
 
 impl Parsed for usize {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
@@ -60,6 +60,12 @@ impl<T: Parsed> Parsed for std::rc::Rc<[T]> {
         (0..usize::parse(reader)?)
             .map(|_| T::parse(reader))
             .collect()
+    }
+}
+
+impl Parsed for () {
+    fn parse(_: &mut impl Read) -> std::io::Result<Self> {
+        Ok(())
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{Parsed, cp_info, minus_one, u1, u2, u4};
+use super::{Parsed, ParsedWithString, cp_info, member_info, minus_one, u1, u2, u4};
 use bitflags::bitflags;
 use leche_parse::collect_with_len_type;
 use std::{
@@ -23,7 +23,7 @@ fn get_constant_string(constant_pool: &[cp_info], index: usize) -> std::io::Resu
 }
 
 #[derive(Debug)]
-pub enum MemberAttribute<TypeAnnotationTarget: Parsed> {
+pub enum MemberAttribute<TypeAnnotationTarget> {
     /// Indicates a class member that does not appear in the source code.
     ///
     /// Not valid on [`record_component_info`].
@@ -50,9 +50,11 @@ pub enum MemberAttribute<TypeAnnotationTarget: Parsed> {
     Unknown(Rc<str>),
 }
 
-impl<T: Parsed> MemberAttribute<T> {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+impl<T: Parsed> ParsedWithString for MemberAttribute<T> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
+
+        let _attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
             "Synthetic" => Ok(Self::Synthetic),
@@ -78,7 +80,7 @@ impl<T: Parsed> MemberAttribute<T> {
 }
 
 #[derive(Debug, Parsed)]
-pub struct type_annotation<T: Parsed> {
+pub struct type_annotation<T> {
     pub target: T,
     pub target_path: type_path,
 }
@@ -346,8 +348,8 @@ pub enum ClassAttribute {
     Member(MemberAttribute<ClassTypeAnnotationTarget>),
 }
 
-impl ClassAttribute {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+impl ParsedWithString for ClassAttribute {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let attribute_length = u4::parse(reader)?;
@@ -367,24 +369,24 @@ impl ClassAttribute {
             "BootstrapMethods" => Ok(Self::BootstrapMethods(Parsed::parse(reader)?)),
             "Module" => Ok(Self::Module(Parsed::parse(reader)?)),
             "ModulePackages" => Ok(Self::ModulePackages(
-                (0..usize::parse(reader)?)
+                (0..u2::parse(reader)?)
                     .map(|_| usize::parse(reader).map(minus_one))
                     .collect::<Result<_, _>>()?,
             )),
             "ModuleMainClass" => Ok(Self::ModuleMainClass(usize::parse(reader)? - 1)),
             "NestHost" => Ok(Self::NestHost(usize::parse(reader)? - 1)),
             "NestMembers" => Ok(Self::NestMembers(
-                (0..usize::parse(reader)?)
+                (0..u2::parse(reader)?)
                     .map(|_| usize::parse(reader).map(minus_one))
                     .collect::<Result<_, _>>()?,
             )),
             "Record" => Ok(Self::Record(
-                (0..usize::parse(reader)?)
+                (0..u2::parse(reader)?)
                     .map(|_| record_component_info::parse(reader, constant_pool))
                     .collect::<Result<_, _>>()?,
             )),
             "PermittedSubclasses" => Ok(Self::PermittedSubclasses(
-                (0..usize::parse(reader)?)
+                (0..u2::parse(reader)?)
                     .map(|_| usize::parse(reader).map(minus_one))
                     .collect::<Result<_, _>>()?,
             )),
@@ -393,29 +395,7 @@ impl ClassAttribute {
     }
 }
 
-#[derive(Debug)]
-pub struct record_component_info {
-    /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
-    /// unqualified name of a record component.
-    name_index: usize,
-
-    /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the field
-    /// descriptor of a record component.
-    descriptor_index: usize,
-    attributes: Rc<[MemberAttribute<FieldTypeAnnotationTarget>]>,
-}
-
-impl record_component_info {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
-        Ok(Self {
-            name_index: usize::parse(reader)? - 1,
-            descriptor_index: usize::parse(reader)? - 1,
-            attributes: (0..usize::parse(reader)?)
-                .map(|_| MemberAttribute::parse(reader, constant_pool))
-                .collect::<Result<_, _>>()?,
-        })
-    }
-}
+pub type record_component_info = member_info<(), MemberAttribute<FieldTypeAnnotationTarget>>;
 
 #[derive(Debug, Parsed)]
 pub struct ModuleAttribute {
@@ -455,7 +435,7 @@ pub struct Provide {
 impl Parsed for Provide {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let provides_index = usize::parse(reader)? - 1;
-        let provides_with_index = (0..usize::parse(reader)?)
+        let provides_with_index = (0..u2::parse(reader)?)
             .map(|_| usize::parse(reader).map(minus_one))
             .collect::<Result<_, _>>()?;
 
@@ -472,7 +452,7 @@ pub struct UsesIndex(Rc<[usize]>);
 impl Parsed for UsesIndex {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         Ok(Self(
-            (0..usize::parse(reader)?)
+            (0..u2::parse(reader)?)
                 .map(|_| usize::parse(reader).map(minus_one))
                 .collect::<Result<_, _>>()?,
         ))
@@ -531,7 +511,7 @@ impl Parsed for Export {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let exports_index = usize::parse(reader)? - 1;
         let exports_flags = Parsed::parse(reader)?;
-        let exports_to_index = (0..usize::parse(reader)?)
+        let exports_to_index = (0..u2::parse(reader)?)
             .map(|_| usize::parse(reader).map(minus_one))
             .collect::<Result<_, _>>()?;
 
@@ -606,9 +586,11 @@ pub enum FieldAttribute {
     Member(MemberAttribute<FieldTypeAnnotationTarget>),
 }
 
-impl FieldAttribute {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+impl ParsedWithString for FieldAttribute {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
+
+        let _attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
             "ConstantValue" => Ok(Self::ConstantValue {
@@ -661,38 +643,22 @@ pub enum MethodAttribute {
     Member(MemberAttribute<MethodTypeAnnotationTarget>),
 }
 
-impl MethodAttribute {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+impl ParsedWithString for MethodAttribute {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
+        let _attribute_length = u4::parse(reader)?;
+
         match name.as_ref() {
-            "Code" => {
-                let mut u2 = [0; 2];
-
-                reader.read_exact(&mut u2)?;
-                let max_stack = u2::from_be_bytes(u2);
-
-                reader.read_exact(&mut u2)?;
-                let max_locals = u2::from_be_bytes(u2);
-
-                let mut code_length = [0; 4];
-                reader.read_exact(&mut code_length)?;
-                let code = collect_with_len_type::<u4, _, _>(reader)?;
-
-                let exception_table = Parsed::parse(reader)?;
-
-                let attributes = (0..u2::parse(reader)?)
+            "Code" => Ok(Self::Code {
+                max_stack: u2::parse(reader)?,
+                max_locals: u2::parse(reader)?,
+                code: collect_with_len_type::<u4, _, _>(reader)?,
+                exception_table: Parsed::parse(reader)?,
+                attributes: (0..u2::parse(reader)?)
                     .map(|_| CodeAttribute::parse(reader, constant_pool))
-                    .collect::<Result<_, _>>()?;
-
-                Ok(Self::Code {
-                    max_stack,
-                    max_locals,
-                    code,
-                    exception_table,
-                    attributes,
-                })
-            }
+                    .collect::<Result<_, _>>()?,
+            }),
             "Exceptions" => Ok(Self::Exceptions {
                 exception_index_table: (0..u2::parse(reader)?)
                     .map(|_| usize::parse(reader).map(minus_one))
@@ -769,9 +735,11 @@ pub enum CodeAttribute {
     Unknown(Rc<str>),
 }
 
-impl CodeAttribute {
-    pub fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+impl ParsedWithString for CodeAttribute {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
+
+        let _attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
             "StackMapTable" => Ok(Self::StackMapTable(Parsed::parse(reader)?)),
