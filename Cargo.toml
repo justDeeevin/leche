@@ -11,6 +11,7 @@ repository.workspace = true
 bitflags = "2.11.0"
 color-eyre = "0.6.5"
 leche-parse = { version = "25.0.0", path = "parse", features = ["bitflags"] }
+nom = "8.0.0"
 
 [workspace]
 members = ["parse", "parse/macros"]
