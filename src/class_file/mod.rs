@@ -1,9 +1,18 @@
 mod attributes;
 
+use crate::{
+    class_file::attributes::BootstrapMethod,
+    descriptors::{parse_field_descriptor, parse_method_descriptor},
+};
 use attributes::{ClassAttribute, FieldAttribute, MethodAttribute};
 use bitflags::bitflags;
 use leche_parse::Parsed;
-use std::{io::Read, rc::Rc};
+use regex::Regex;
+use std::{
+    cell::Cell,
+    io::{Error, ErrorKind, Read},
+    rc::Rc,
+};
 
 type u1 = u8;
 type u2 = u16;
@@ -39,12 +48,11 @@ pub struct ClassFile {
     pub fields: Rc<[field_info]>,
     pub methods: Rc<[method_info]>,
     pub attributes: Rc<[ClassAttribute]>,
+    cached_bootstrap_methods_index: Cell<Option<usize>>,
 }
 
 impl Parsed for ClassFile {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
         if u4::parse(reader)? != MAGIC_NUMBER {
             return Err(Error::new(ErrorKind::InvalidData, "invalid magic number"));
         }
@@ -89,11 +97,15 @@ impl Parsed for ClassFile {
             .map(|_| method_info::parse(reader, &constant_pool))
             .collect::<Result<_, _>>()?;
 
-        let attributes = (0..u2::parse(reader)?)
+        let attributes: Rc<[ClassAttribute]> = (0..u2::parse(reader)?)
             .map(|_| ClassAttribute::parse(reader, &constant_pool))
             .collect::<Result<_, _>>()?;
 
-        Ok(Self {
+        if reader.read(&mut [0; 2])? != 0 {
+            return Err(Error::new(ErrorKind::InvalidData, "trailing data"));
+        }
+
+        let out = Self {
             minor_version,
             major_version,
             constant_pool,
@@ -104,7 +116,14 @@ impl Parsed for ClassFile {
             fields,
             methods,
             attributes,
-        })
+            cached_bootstrap_methods_index: Cell::new(None),
+        };
+
+        for constant in out.constant_pool.as_ref() {
+            out.verify_constant(constant)?;
+        }
+
+        Ok(out)
     }
 }
 
@@ -153,6 +172,255 @@ impl ClassFile {
             _ => false,
         }
     }
+
+    fn verify_constant(&self, constant: &cp_info) -> std::io::Result<()> {
+        use cp_info::*;
+
+        match constant {
+            Utf8 { .. } | Integer { .. } | Float { .. } | Long { .. } | Double { .. } => {}
+            Class { name_index } => {
+                if !matches!(self.constant_pool[*name_index], Utf8 { .. }) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "class name does not point to a Utf8 constant",
+                    ));
+                }
+            }
+            String { string_index } => {
+                if !matches!(self.constant_pool[*string_index], Utf8 { .. }) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "string does not point to a Utf8 constant",
+                    ));
+                }
+            }
+            Fieldref(RefInfo {
+                class_index,
+                name_and_type_index,
+            }) => {
+                if !matches!(self.constant_pool[*class_index], Class { .. }) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fieldref class index does not point to a Class constant",
+                    ));
+                }
+                let NameAndType {
+                    name_index,
+                    descriptor_index,
+                } = &self.constant_pool[*name_and_type_index]
+                else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fieldref name_and_type_index does not point to a NameAndType constant",
+                    ));
+                };
+                self.verify_name_and_type(Some(true), *name_index, *descriptor_index)?;
+            }
+            Methodref(RefInfo {
+                class_index,
+                name_and_type_index,
+            })
+            | InterfaceMethodref(RefInfo {
+                class_index,
+                name_and_type_index,
+            }) => {
+                if !matches!(self.constant_pool[*class_index], Class { .. }) {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "methodref class index does not point to a Class constant",
+                    ));
+                }
+                let NameAndType {
+                    name_index,
+                    descriptor_index,
+                } = &self.constant_pool[*name_and_type_index]
+                else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "methodref name_and_type_index does not point to a NameAndType constant",
+                    ));
+                };
+                self.verify_name_and_type(Some(false), *name_index, *descriptor_index)?;
+            }
+            NameAndType {
+                name_index,
+                descriptor_index,
+            } => {
+                self.verify_name_and_type(None, *name_index, *descriptor_index)?;
+            }
+            MethodHandle {
+                reference_kind,
+                reference_index,
+            } => {
+                use ReferenceKind::*;
+
+                let reference = &self.constant_pool[*reference_index];
+
+                if match reference_kind {
+                    GetField | GetStatic | PutField | PutStatic => {
+                        !matches!(reference, Fieldref { .. })
+                    }
+                    InvokeVirtual | NewInvokeSpecial => !matches!(reference, Methodref { .. }),
+                    InvokeStatic | InvokeSpecial => {
+                        !matches!(reference, Methodref { .. } | InterfaceMethodref { .. })
+                    }
+                    InvokeInterface => !matches!(reference, InterfaceMethodref { .. }),
+                } {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "MethodHandle reference_kind mismatch",
+                    ));
+                }
+            }
+            MethodType { descriptor_index } => {
+                let Utf8(descriptor) = &self.constant_pool[*descriptor_index] else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "method_type descriptor_index does not point to a Utf8 constant",
+                    ));
+                };
+                if parse_method_descriptor(descriptor).is_err() {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "method_type descriptor is not a valid method descriptor",
+                    ));
+                }
+            }
+            Dynamic(DynamicInfo {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            })
+            | InvokeDynamic(DynamicInfo {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            }) => {
+                if self
+                    .bootstrap_methods()
+                    .get(*bootstrap_method_attr_index)
+                    .is_none()
+                {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "dynamic bootstrap_method_attr_index is out of bounds",
+                    ));
+                }
+                let NameAndType {
+                    name_index,
+                    descriptor_index,
+                } = &self.constant_pool[*name_and_type_index]
+                else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "dynamic name_and_type_index does not point to a NameAndType constant",
+                    ));
+                };
+                self.verify_name_and_type(None, *name_index, *descriptor_index)?;
+            }
+            Module { name_index } => {
+                let Utf8(name) = &self.constant_pool[*name_index] else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "module name_index does not point to a Utf8 constant",
+                    ));
+                };
+                if !is_valid_module_name(name) {
+                    return Err(Error::new(ErrorKind::InvalidData, "invalid module name"));
+                }
+            }
+            Package { name_index } => {
+                let Utf8(name) = &self.constant_pool[*name_index] else {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "package name_index does not point to a Utf8 constant",
+                    ));
+                };
+                if !is_valid_module_name(name) {
+                    return Err(Error::new(ErrorKind::InvalidData, "invalid package name"));
+                }
+            }
+            _ => todo!(),
+        }
+
+        Ok(())
+    }
+
+    fn verify_name_and_type(
+        &self,
+        is_field: Option<bool>,
+        name_index: usize,
+        descriptor_index: usize,
+    ) -> std::io::Result<()> {
+        let cp_info::Utf8(name) = &self.constant_pool[name_index] else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "name_and_type name_index does not point to a Utf8 constant",
+            ));
+        };
+        let cp_info::Utf8(descriptor) = &self.constant_pool[descriptor_index] else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "name_and_type descriptor_index does not point to a Utf8 constant",
+            ));
+        };
+
+        let Some(is_field) = is_field else {
+            return Ok(());
+        };
+
+        if is_field {
+            if parse_field_descriptor(descriptor).is_err() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "name_and_type descriptor is not a valid field descriptor",
+                ));
+            }
+        } else {
+            if parse_method_descriptor(descriptor).is_err() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "name_and_type descriptor is not a valid method descriptor",
+                ));
+            }
+            if name.starts_with('<') && name.as_ref() != "<init>" {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "name_and_type method name starts with '<' and is not '<init>'",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn bootstrap_methods(&self) -> Rc<[BootstrapMethod]> {
+        if let Some(index) = self.cached_bootstrap_methods_index.get() {
+            let ClassAttribute::BootstrapMethods(methods) = &self.attributes[index] else {
+                unreachable!()
+            };
+            methods.clone()
+        } else if let Some((index, methods)) =
+            self.attributes
+                .iter()
+                .enumerate()
+                .find_map(|(i, attr)| match attr {
+                    ClassAttribute::BootstrapMethods(methods) => Some((i, methods.clone())),
+                    _ => None,
+                })
+        {
+            self.cached_bootstrap_methods_index.set(Some(index));
+            methods
+        } else {
+            Rc::new([])
+        }
+    }
+}
+
+fn is_valid_module_name(name: &str) -> bool {
+    name.chars()
+        .all(|c| !('\u{0000}'..='\u{001f}').contains(&c))
+        && Regex::new(r"^((\\@)|(\\\\)|(\\:)|[^\\@:])*$")
+            .unwrap()
+            .is_match(name)
 }
 
 #[derive(Debug, Clone, Copy, Parsed)]

@@ -46,7 +46,7 @@ fn parse_base_type(input: &str) -> IResult<&str, BaseType> {
     .parse(input)
 }
 
-fn parse_field_descriptor(input: &str) -> IResult<&str, FieldDescriptor> {
+pub fn parse_field_descriptor(input: &str) -> IResult<&str, FieldDescriptor> {
     alt((
         map(parse_base_type, FieldDescriptor::Base),
         map(
@@ -65,7 +65,7 @@ pub struct MethodDescriptor {
     pub return_descriptor: Option<FieldDescriptor>,
 }
 
-fn parse_method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
+pub fn parse_method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
     let (input, parameters) =
         delimited(char('('), many0(parse_field_descriptor), char(')')).parse(input)?;
     let (input, return_descriptor) =

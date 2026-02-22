@@ -54,14 +54,19 @@ impl<T: Parsed> ParsedWithString for MemberAttribute<T> {
     fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
-        let _attribute_length = u4::parse(reader)?;
+        let attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
-            "Synthetic" => Ok(Self::Synthetic),
-            "Signature" => Ok(Self::Signature {
-                signature_index: usize::parse(reader)? - 1,
-            }),
-            "Deprecated" => Ok(Self::Deprecated),
+            "Synthetic" => check_attr_length(name, 0, attribute_length, Self::Synthetic),
+            "Signature" => check_attr_length(
+                name,
+                2,
+                attribute_length,
+                Self::Signature {
+                    signature_index: usize::parse(reader)? - 1,
+                },
+            ),
+            "Deprecated" => check_attr_length(name, 0, attribute_length, Self::Deprecated),
             "RuntimeVisibleAnnotations" => {
                 Ok(Self::RuntimeVisibleAnnotations(Parsed::parse(reader)?))
             }
@@ -348,6 +353,17 @@ pub enum ClassAttribute {
     Member(MemberAttribute<ClassTypeAnnotationTarget>),
 }
 
+fn check_attr_length<T>(attr: &str, expected: u4, actual: u4, output: T) -> std::io::Result<T> {
+    if actual != expected {
+        Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("{attr} attribute must have attribute_length {expected}; found {actual}"),
+        ))
+    } else {
+        Ok(output)
+    }
+}
+
 impl ParsedWithString for ClassAttribute {
     fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
@@ -355,14 +371,24 @@ impl ParsedWithString for ClassAttribute {
         let attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
-            "SourceFile" => Ok(Self::SourceFile {
-                sourcefile_index: usize::parse(reader)? - 1,
-            }),
+            "SourceFile" => check_attr_length(
+                name,
+                2,
+                attribute_length,
+                Self::SourceFile {
+                    sourcefile_index: usize::parse(reader)? - 1,
+                },
+            ),
             "InnerClasses" => Ok(Self::InnerClasses(Parsed::parse(reader)?)),
-            "EnclosingMethod" => Ok(Self::EnclosingMethod {
-                class_index: usize::parse(reader)? - 1,
-                method_index: Option::<_>::parse(reader)?.map(minus_one),
-            }),
+            "EnclosingMethod" => check_attr_length(
+                name,
+                4,
+                attribute_length,
+                Self::EnclosingMethod {
+                    class_index: usize::parse(reader)? - 1,
+                    method_index: Option::<_>::parse(reader)?.map(minus_one),
+                },
+            ),
             "SourceDebugExtension" => Ok(Self::SourceDebugExtension(
                 std::io::read_to_string((reader).take(attribute_length as u64))?.into(),
             )),
@@ -373,8 +399,18 @@ impl ParsedWithString for ClassAttribute {
                     .map(|_| usize::parse(reader).map(minus_one))
                     .collect::<Result<_, _>>()?,
             )),
-            "ModuleMainClass" => Ok(Self::ModuleMainClass(usize::parse(reader)? - 1)),
-            "NestHost" => Ok(Self::NestHost(usize::parse(reader)? - 1)),
+            "ModuleMainClass" => check_attr_length(
+                name,
+                2,
+                attribute_length,
+                Self::ModuleMainClass(usize::parse(reader)? - 1),
+            ),
+            "NestHost" => check_attr_length(
+                name,
+                2,
+                attribute_length,
+                Self::NestHost(usize::parse(reader)? - 1),
+            ),
             "NestMembers" => Ok(Self::NestMembers(
                 (0..u2::parse(reader)?)
                     .map(|_| usize::parse(reader).map(minus_one))
@@ -591,12 +627,17 @@ impl ParsedWithString for FieldAttribute {
     fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
-        let _attribute_length = u4::parse(reader)?;
+        let attribute_length = u4::parse(reader)?;
 
         match name.as_ref() {
-            "ConstantValue" => Ok(Self::ConstantValue {
-                constantvalue_index: usize::parse(reader)? - 1,
-            }),
+            "ConstantValue" => check_attr_length(
+                name,
+                2,
+                attribute_length,
+                Self::ConstantValue {
+                    constantvalue_index: usize::parse(reader)? - 1,
+                },
+            ),
             _ => Ok(Self::Member(MemberAttribute::parse(reader, constant_pool)?)),
         }
     }
