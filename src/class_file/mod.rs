@@ -439,11 +439,11 @@ pub struct RefInfo {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing a class or
     /// interface type of which the reference is a member.
     #[map(minus_one)]
-    class_index: usize,
+    pub class_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the reference.
     #[map(minus_one)]
-    name_and_type_index: usize,
+    pub name_and_type_index: usize,
 }
 
 #[derive(Debug, Parsed)]
@@ -451,11 +451,11 @@ pub struct DynamicInfo {
     /// Index into the `bootstrap_methods` array of the bootstrap method table of this class file.
     ///
     /// This can be used for self-reference, which will cause a failure at the time of resolution.
-    bootstrap_method_attr_index: usize,
+    pub bootstrap_method_attr_index: usize,
     /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
     /// name and descriptor of the method.
     #[map(minus_one)]
-    name_and_type_index: usize,
+    pub name_and_type_index: usize,
 }
 
 trait ParsedWithString: Sized {

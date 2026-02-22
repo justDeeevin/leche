@@ -215,15 +215,15 @@ impl Parsed for supertype_target {
 #[derive(Debug, Parsed)]
 pub struct annotation {
     #[map(minus_one)]
-    type_index: usize,
-    element_value_pairs: Rc<[ElementValuePair]>,
+    pub type_index: usize,
+    pub element_value_pairs: Rc<[ElementValuePair]>,
 }
 
 #[derive(Debug, Parsed)]
 pub struct ElementValuePair {
     #[map(minus_one)]
-    element_name_index: usize,
-    value: element_value,
+    pub element_name_index: usize,
+    pub value: element_value,
 }
 
 #[derive(Debug, Parsed)]
@@ -402,34 +402,34 @@ pub struct ModuleAttribute {
     #[map(minus_one)]
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the name of
     /// the current module.
-    module_name_index: usize,
+    pub module_name_index: usize,
     // TODO: bitflags
-    module_flags: ParameterAccessFlags,
+    pub module_flags: ParameterAccessFlags,
     #[map(|o| o.map(minus_one))]
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
     /// version of the current module.
-    module_version_index: Option<usize>,
+    pub module_version_index: Option<usize>,
     /// Dependencies
-    requires: Rc<[Require]>,
+    pub requires: Rc<[Require]>,
     /// Exported packages
-    exports: Rc<[Export]>,
+    pub exports: Rc<[Export]>,
     /// Opened packages
-    opens: Rc<[Export]>,
+    pub opens: Rc<[Export]>,
     /// Indices into the constant pool at which [`cp_info::Class`]es are found representing service
     /// interfaces which the current module may discover via `java.util.ServiceLoader`.`
-    uses_index: UsesIndex,
+    pub uses_index: UsesIndex,
     /// Service implementations
-    provides: Rc<[Provide]>,
+    pub provides: Rc<[Provide]>,
 }
 
 #[derive(Debug)]
 pub struct Provide {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing the
     /// service interface.
-    provides_index: usize,
+    pub provides_index: usize,
     /// Indices into the constant pool at which [`cp_info::Class`]es are found representing the
     /// service implementations.
-    provides_with_index: Rc<[usize]>,
+    pub provides_with_index: Rc<[usize]>,
 }
 
 impl Parsed for Provide {
@@ -464,12 +464,13 @@ pub struct Require {
     #[map(minus_one)]
     /// Index into the constant pool at which a [`cp_info::Module`] is found representing the
     /// required module.
-    requires_index: usize,
-    requires_flags: RequireFlags,
+    pub requires_index: usize,
+    pub requires_flags: RequireFlags,
+
     #[map(|o| o.map(minus_one))]
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
     /// version of the required module.
-    requires_version_index: Option<usize>,
+    pub requires_version_index: Option<usize>,
 }
 
 #[derive(Debug, Parsed)]
@@ -489,11 +490,11 @@ bitflags! {
 pub struct Export {
     /// Index into the constant pool at which a [`cp_info::Package`] is found representing the name of
     /// the exported package.
-    exports_index: usize,
-    exports_flags: ExportFlags,
+    pub exports_index: usize,
+    pub exports_flags: ExportFlags,
     /// Indices into the constant pool at which [`cp_info::Module`]es are found representing the
     /// modules that can access the types and members in this exported package.
-    exports_to_index: Rc<[usize]>,
+    pub exports_to_index: Rc<[usize]>,
 }
 
 #[derive(Debug, Parsed)]
@@ -528,9 +529,9 @@ pub struct BootstrapMethod {
     /// Index into the constant pool at which a [`cp_info::MethodHandle`] is found representing the
     /// bootstrap method.
     #[map(minus_one)]
-    bootstrap_method_ref: usize,
+    pub bootstrap_method_ref: usize,
     /// Indices into the constant pool at which loadable constants are found.
-    bootstrap_arguments: Rc<[usize]>,
+    pub bootstrap_arguments: Rc<[usize]>,
 }
 
 #[derive(Debug, Parsed)]
@@ -538,25 +539,25 @@ pub struct InnerClass {
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing the
     /// inner class.
     #[map(minus_one)]
-    inner_class_info_index: usize,
+    pub inner_class_info_index: usize,
     /// Index into the constant pool at which a [`cp_info::Class`] is found representing the outer
     /// class, if any.
     ///
     /// Must be `None` if anonymous for ^v51.0.
     #[map(|o| o.map(minus_one))]
-    outer_class_info_index: Option<usize>,
+    pub outer_class_info_index: Option<usize>,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the simple
     /// name of the inner class.
     ///
     /// `None` if anonymous.
     #[map(|o| o.map(minus_one))]
-    inner_name_index: Option<usize>,
-    inner_class_access_flags: InnerClassAccessFlags,
+    pub inner_name_index: Option<usize>,
+    pub inner_class_access_flags: InnerClassAccessFlags,
 }
 
 #[derive(Debug, Parsed)]
 #[bitflags]
-struct InnerClassAccessFlags(u2);
+pub struct InnerClassAccessFlags(u2);
 
 bitflags! {
     impl InnerClassAccessFlags: u2 {
@@ -702,17 +703,17 @@ pub struct ExceptionHandler {
     /// Range of indices in the code array in which the exception handler is active.
     ///
     /// Referred to as `start_pc` and `end_pc` in the JVM spec.
-    active: Range<usize>,
+    pub active: Range<usize>,
 
     /// Index of the first instruction of the exception handler in the code array.
-    handler_pc: u2,
+    pub handler_pc: u2,
 
     /// An index into the constant pool at which a [`cp_info::Class`] is found representing the
     /// exception type.
     ///
     /// If `None`, the exception handler catches all exceptions.
     #[map(|o| o.map(minus_one))]
-    catch_type: Option<usize>,
+    pub catch_type: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -754,47 +755,47 @@ impl ParsedWithString for CodeAttribute {
 #[derive(Debug, Parsed)]
 pub struct LocalVariable {
     /// Range of indices in the code array within which the local variable has a value.
-    scope: Range<usize>,
+    pub scope: Range<usize>,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
     /// unqualified name of a local variable.
     #[map(minus_one)]
-    name_index: usize,
+    pub name_index: usize,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the field
     /// descriptor of a local variable.
     #[map(minus_one)]
-    descriptor_index: usize,
+    pub descriptor_index: usize,
     /// Index into the current frame's local variable array at which a local variable is located.
-    index: usize,
+    pub index: usize,
 }
 
 #[derive(Debug, Parsed)]
 pub struct LocalVariableType {
     /// Range of indices in the code array within which the local variable has a value.
-    scope: Range<usize>,
+    pub scope: Range<usize>,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
     /// unqualified name of a local variable.
     #[map(minus_one)]
-    name_index: usize,
+    pub name_index: usize,
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the field
     /// descriptor of a local variable's type.
     #[map(minus_one)]
-    descriptor_index: usize,
+    pub descriptor_index: usize,
     /// Index into the current frame's local variable array at which a local variable is located.
-    index: usize,
+    pub index: usize,
 }
 
 #[derive(Debug, Parsed)]
 pub struct LineNumber {
     /// Index of the first instruction of the line in the code array.
-    start_pc: usize,
+    pub start_pc: usize,
     // TODO: should this be usize?
-    line_number: u2,
+    pub line_number: u2,
 }
 
 #[derive(Debug)]
 pub struct stack_map_frame {
-    offset_delta: u2,
-    info: stack_map_frame_info,
+    pub offset_delta: u2,
+    pub info: stack_map_frame_info,
 }
 
 impl Parsed for stack_map_frame {
@@ -850,7 +851,7 @@ impl Parsed for stack_map_frame {
 }
 
 #[derive(Debug)]
-enum stack_map_frame_info {
+pub enum stack_map_frame_info {
     /// Same locals as previous frame; empty operand stack.
     same_frame,
     /// Same locals as previous frame; operand stack has one entry.
@@ -872,7 +873,7 @@ enum stack_map_frame_info {
 }
 
 #[derive(Debug, Parsed)]
-enum verification_type_info {
+pub enum verification_type_info {
     Top,
     Integer,
     Float,
