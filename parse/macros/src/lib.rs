@@ -146,12 +146,11 @@ fn derive_unnamed_fields(fields: &FieldsUnnamed, parent: Path) -> Result<TokenSt
 #[cfg(feature = "bitflags")]
 fn derive_bitflags(name: &Ident) -> Result<TokenStream> {
     Ok(quote! {
-       ::bitflags::Flags::from_bits(
-           <<Self as ::bitflags::Flags>::Bits>::parse(reader)?
-       ).ok_or_else(|| {
+        let bits = <<Self as ::bitflags::Flags>::Bits>::parse(reader)?;
+       ::bitflags::Flags::from_bits(bits).ok_or_else(|| {
            ::std::io::Error::new(
                ::std::io::ErrorKind::InvalidData,
-               format!("invalid {}", ::std::stringify!(#name))
+               format!("invalid bits for {}: {bits}", ::std::stringify!(#name))
            )
        })
     }
@@ -242,7 +241,7 @@ fn derive_enum(e: DataEnum, name: &Ident, mut repr: Option<Ident>) -> Result<Tok
             #(
                 #tags => #variants,
             )*
-            _ => Err(::std::io::Error::new(::std::io::ErrorKind::InvalidData, concat!("invalid tag for ", stringify!(#name))))
+            tag => Err(::std::io::Error::new(::std::io::ErrorKind::InvalidData, format!("invalid tag for {}: {tag}", stringify!(#name))))
         }
     }
     .into())
