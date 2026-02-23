@@ -9,12 +9,14 @@ use nom::{
 };
 use std::rc::Rc;
 
+#[derive(Debug)]
 pub enum FieldDescriptor {
     Base(BaseType),
     Class(Rc<str>),
     Array(Box<Self>),
 }
 
+#[derive(Debug)]
 pub enum BaseType {
     Byte,
     Char,
@@ -46,7 +48,7 @@ fn parse_base_type(input: &str) -> IResult<&str, BaseType> {
     .parse(input)
 }
 
-fn parse_field_descriptor(input: &str) -> IResult<&str, FieldDescriptor> {
+pub fn parse_field_descriptor(input: &str) -> IResult<&str, FieldDescriptor> {
     alt((
         map(parse_base_type, FieldDescriptor::Base),
         map(
@@ -60,22 +62,26 @@ fn parse_field_descriptor(input: &str) -> IResult<&str, FieldDescriptor> {
     .parse(input)
 }
 
+#[derive(Debug)]
 pub struct MethodDescriptor {
     pub parameter_descriptors: Rc<[FieldDescriptor]>,
     pub return_descriptor: Option<FieldDescriptor>,
 }
 
-fn parse_method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
-    let (input, parameters) =
-        delimited(char('('), many0(parse_field_descriptor), char(')')).parse(input)?;
-    let (input, return_descriptor) =
-        alt((map(parse_field_descriptor, Some), map(char('V'), |_| None))).parse(input)?;
+pub fn parse_return_descriptor(input: &str) -> IResult<&str, Option<FieldDescriptor>> {
+    alt((map(parse_field_descriptor, Some), map(char('V'), |_| None))).parse(input)
+}
 
-    Ok((
-        input,
-        MethodDescriptor {
+pub fn parse_method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
+    map(
+        (
+            delimited(char('('), many0(parse_field_descriptor), char(')')),
+            parse_return_descriptor,
+        ),
+        |(parameters, return_descriptor)| MethodDescriptor {
             parameter_descriptors: parameters.into(),
             return_descriptor,
         },
-    ))
+    )
+    .parse(input)
 }

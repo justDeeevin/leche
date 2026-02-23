@@ -3,7 +3,10 @@ pub mod attributes;
 use attributes::{ClassAttribute, FieldAttribute, MethodAttribute};
 use bitflags::bitflags;
 use leche_parse::Parsed;
-use std::{io::Read, rc::Rc};
+use std::{
+    io::{Error, ErrorKind, Read},
+    rc::Rc,
+};
 
 type u1 = u8;
 type u2 = u16;
@@ -50,107 +53,218 @@ impl Parsed for ClassFile {
         }
 
         let minor_version = u2::parse(reader)?;
-
         let major_version = u2::parse(reader)?;
-
-        if !(45..=69).contains(&major_version) {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("unsupported major version: {major_version}"),
-            ));
-        }
-
-        if major_version >= 56 && minor_version != 0 && minor_version != u2::MAX {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid minor version: {minor_version}"),
-            ));
-        }
 
         let constant_pool = (0..(u2::parse(reader)? - 1))
             .flat_map(|_| cp_info::parse(reader))
             .collect::<Result<Rc<_>, _>>()?;
 
-        let access_flags = ClassAccessFlags::parse(reader)?;
-
-        let this_class = usize::parse(reader)? - 1;
-
-        let super_class = Option::parse(reader)?.map(minus_one);
-
-        let interfaces = (0..u2::parse(reader)?)
-            .map(|_| usize::parse(reader).map(minus_one))
-            .collect::<Result<_, _>>()?;
-
-        let fields = (0..u2::parse(reader)?)
-            .map(|_| field_info::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        let methods = (0..u2::parse(reader)?)
-            .map(|_| method_info::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        let attributes = (0..u2::parse(reader)?)
-            .map(|_| ClassAttribute::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
         Ok(Self {
             minor_version,
             major_version,
+            access_flags: ClassAccessFlags::parse(reader)?,
+            this_class: usize::parse(reader)? - 1,
+            super_class: Option::parse(reader)?.map(minus_one),
+            interfaces: (0..u2::parse(reader)?)
+                .map(|_| usize::parse(reader).map(minus_one))
+                .collect::<Result<_, _>>()?,
+            fields: (0..u2::parse(reader)?)
+                .map(|_| field_info::parse(reader, &constant_pool))
+                .collect::<Result<_, _>>()?,
+            methods: (0..u2::parse(reader)?)
+                .map(|_| method_info::parse(reader, &constant_pool))
+                .collect::<Result<_, _>>()?,
+            attributes: (0..u2::parse(reader)?)
+                .map(|_| ClassAttribute::parse(reader, &constant_pool))
+                .collect::<Result<_, _>>()?,
             constant_pool,
-            access_flags,
-            this_class,
-            super_class,
-            interfaces,
-            fields,
-            methods,
-            attributes,
         })
     }
 }
 
 impl ClassFile {
-    fn uses_preview_features(&self) -> bool {
-        self.minor_version == u2::MAX
-    }
-
-    fn is_constant_valid(&self, constant: cp_info) -> bool {
-        use cp_info::*;
-
-        match constant {
-            Utf8 { .. }
-            | Integer { .. }
-            | Float { .. }
-            | Long { .. }
-            | Double { .. }
-            | Class { .. }
-            | String { .. }
-            | Fieldref { .. }
-            | Methodref { .. }
-            | InterfaceMethodref { .. }
-            | NameAndType { .. } => self.major_version > 45 || self.minor_version >= 3,
-            MethodHandle { .. } | MethodType { .. } | InvokeDynamic { .. } => {
-                self.major_version >= 51
+    pub fn get_class(&self, index: usize) -> std::io::Result<&Rc<str>> {
+        if let cp_info::Class { name_index } = &self.constant_pool[index] {
+            if let cp_info::Utf8(name) = &self.constant_pool[*name_index] {
+                Ok(name)
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("class at index {index} is not a Utf8 constant"),
+                ))
             }
-            Module { .. } | Package { .. } => self.major_version >= 53,
-            Dynamic { .. } => self.major_version >= 55,
-            SecondHalf => true,
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected class at index {index}"),
+            ))
         }
     }
 
-    fn is_constant_loadable(&self, constant: cp_info) -> bool {
-        use cp_info::*;
+    pub fn get_utf8(&self, index: usize) -> std::io::Result<&Rc<str>> {
+        if let cp_info::Utf8(name) = &self.constant_pool[index] {
+            Ok(name)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Utf8 at index {index}"),
+            ))
+        }
+    }
 
-        match constant {
-            Integer { .. }
-            | Float { .. }
-            | Long { .. }
-            | Double { .. }
-            | String { .. }
-            | MethodHandle { .. }
-            | MethodType { .. }
-            | Dynamic { .. } => true,
-            Class { .. } => self.major_version >= 49,
-            _ => false,
+    pub fn get_int(&self, index: usize) -> std::io::Result<i32> {
+        if let cp_info::Integer(value) = &self.constant_pool[index] {
+            Ok(*value)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Integer at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_double(&self, index: usize) -> std::io::Result<f64> {
+        if let cp_info::Double(value) = &self.constant_pool[index] {
+            Ok(*value)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Double at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_float(&self, index: usize) -> std::io::Result<f32> {
+        if let cp_info::Float(value) = &self.constant_pool[index] {
+            Ok(*value)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Float at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_long(&self, index: usize) -> std::io::Result<i64> {
+        if let cp_info::Long(value) = &self.constant_pool[index] {
+            Ok(*value)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Long at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_name_and_type(&self, index: usize) -> std::io::Result<(&Rc<str>, usize)> {
+        if let cp_info::NameAndType {
+            name_index,
+            descriptor_index,
+        } = &self.constant_pool[index]
+        {
+            Ok((self.get_utf8(*name_index)?, *descriptor_index))
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected NameAndType at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_module(&self, index: usize) -> std::io::Result<&Rc<str>> {
+        if let cp_info::Module { name_index } = &self.constant_pool[index] {
+            if let cp_info::Utf8(name) = &self.constant_pool[*name_index] {
+                Ok(name)
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("module at index {index} is not a Utf8 constant"),
+                ))
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected module at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_package(&self, index: usize) -> std::io::Result<&Rc<str>> {
+        if let cp_info::Package { name_index } = &self.constant_pool[index] {
+            if let cp_info::Utf8(name) = &self.constant_pool[*name_index] {
+                Ok(name)
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("package at index {index} is not a Utf8 constant"),
+                ))
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected package at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_fieldref(&self, index: usize) -> std::io::Result<&RefInfo> {
+        if let cp_info::Fieldref(info) = &self.constant_pool[index] {
+            Ok(info)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Fieldref at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_methodref(&self, index: usize) -> std::io::Result<&RefInfo> {
+        if let cp_info::Methodref(info) = &self.constant_pool[index] {
+            Ok(info)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected Methodref at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_interface_methodref(&self, index: usize) -> std::io::Result<&RefInfo> {
+        if let cp_info::InterfaceMethodref(info) = &self.constant_pool[index] {
+            Ok(info)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected InterfaceMethodref at index {index}"),
+            ))
+        }
+    }
+
+    pub fn get_method_handle(&self, index: usize) -> std::io::Result<&RefInfo> {
+        if let cp_info::MethodHandle {
+            reference_kind,
+            reference_index,
+        } = &self.constant_pool[index]
+        {
+            use ReferenceKind::*;
+            match reference_kind {
+                GetField | GetStatic | PutField | PutStatic => self.get_fieldref(*reference_index),
+                InvokeVirtual | NewInvokeSpecial => self.get_methodref(*reference_index),
+                InvokeStatic | InvokeSpecial => {
+                    let out = self.get_methodref(*reference_index);
+                    if self.major_version >= 52 {
+                        out.or_else(|_| self.get_interface_methodref(*reference_index))
+                    } else {
+                        out
+                    }
+                }
+                InvokeInterface => self.get_interface_methodref(*reference_index),
+            }
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("expected MethodHandle at index {index}"),
+            ))
         }
     }
 }
@@ -208,9 +322,9 @@ bitflags! {
 #[derive(Debug)]
 pub enum cp_info {
     Utf8(Rc<str>),
-    Integer(u32),
+    Integer(i32),
     Float(f32),
-    Long(u64),
+    Long(i64),
     Double(f64),
     /// Used to denote the unusable second half of a two-word value (long or double)
     SecondHalf,
@@ -300,11 +414,11 @@ impl cp_info {
                     std::io::read_to_string((reader).take(len as u64))?.into(),
                 )))
             }
-            3 => Ok(OneOrTwo::One(Self::Integer(u32::parse(reader)?))),
+            3 => Ok(OneOrTwo::One(Self::Integer(i32::parse(reader)?))),
             4 => Ok(OneOrTwo::One(Self::Float(f32::parse(reader)?))),
             // TODO: test 8-byte parsing
             5 => Ok(OneOrTwo::Two(
-                Self::Long(u64::parse(reader)?),
+                Self::Long(i64::parse(reader)?),
                 Self::SecondHalf,
             )),
             6 => Ok(OneOrTwo::Two(
@@ -420,7 +534,7 @@ impl<T> Iterator for OneOrTwoIter<T> {
 /// method must not be `<init>` or `<clinit>`.
 ///
 /// For `NewInvokeSpecial`, the name of the method must be `<init>`.
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[repr(u8)]
 pub enum ReferenceKind {
     GetField = 1,
@@ -486,7 +600,7 @@ impl<F: Parsed, A: ParsedWithString> ParsedWithString for member_info<F, A> {
 pub type field_info = member_info<MemberAccessFlags, FieldAttribute>;
 pub type method_info = member_info<MethodAccessFlags, MethodAttribute>;
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 pub struct MethodAccessFlags(u2);
 
 bitflags! {
@@ -506,7 +620,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[bitflags]
 pub struct MemberAccessFlags(u2);
 

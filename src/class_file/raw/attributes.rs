@@ -80,8 +80,8 @@ impl<T: Parsed> ParsedWithString for MemberAttribute<T> {
 }
 
 #[derive(Debug, Parsed)]
-pub struct type_annotation<T> {
-    pub target: T,
+pub struct type_annotation<Target> {
+    pub target: Target,
     pub target_path: type_path,
 }
 
@@ -111,7 +111,7 @@ pub enum TypePathKind {
     TypeArgument,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Parsed)]
 #[repr(u8)]
 pub enum ClassTypeAnnotationTarget {
     /// Type parameter declaration of a generic class or interface.
@@ -122,7 +122,7 @@ pub enum ClassTypeAnnotationTarget {
     ClassTypeParameterBound(type_parameter_bound_target),
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Parsed)]
 #[repr(u8)]
 pub enum MethodTypeAnnotationTarget {
     /// Type parameter declaration of a generic method or constructor.
@@ -139,7 +139,7 @@ pub enum MethodTypeAnnotationTarget {
     Throws(usize),
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[repr(u8)]
 /// For both [`field_info`](super::field_info) and [`record_component_info`].
 pub enum FieldTypeAnnotationTarget {
@@ -189,13 +189,13 @@ pub struct LocalAnnotationTarget {
     pub index: usize,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Parsed)]
 pub struct type_parameter_bound_target {
     pub type_parameter_index: u1,
     pub bound_index: u1,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum supertype_target {
     Superclass,
     Interface(usize),
@@ -446,7 +446,7 @@ impl Parsed for Provide {
 }
 
 #[derive(Debug)]
-pub struct UsesIndex(Rc<[usize]>);
+pub struct UsesIndex(pub Rc<[usize]>);
 
 impl Parsed for UsesIndex {
     fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
@@ -472,7 +472,7 @@ pub struct Require {
     pub requires_version_index: Option<usize>,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[bitflags]
 pub struct RequireFlags(u2);
 
@@ -496,7 +496,7 @@ pub struct Export {
     pub exports_to_index: Rc<[usize]>,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[bitflags]
 pub struct ExportFlags(u2);
 
@@ -554,7 +554,7 @@ pub struct InnerClass {
     pub inner_class_access_flags: InnerClassAccessFlags,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[bitflags]
 pub struct InnerClassAccessFlags(u2);
 
@@ -685,7 +685,7 @@ pub struct MethodParameter {
     pub access_flags: ParameterAccessFlags,
 }
 
-#[derive(Debug, Parsed)]
+#[derive(Debug, Clone, Copy, Parsed)]
 #[bitflags]
 pub struct ParameterAccessFlags(u2);
 
@@ -871,6 +871,7 @@ pub enum stack_map_frame_info {
 }
 
 #[derive(Debug, Parsed)]
+#[repr(u8)]
 pub enum verification_type_info {
     Top,
     Integer,

@@ -1,7 +1,15 @@
 class Test {
-	static int x = 1;
-
 	public static void main(String[] args) {
-		System.out.println("droddyrox " + (x * 100));
+		for (int i = 1; i <= 100; i++) {
+			System.out.print(i + ": ");
+			String s = new String();
+			if (i % 3 == 0) {
+				s += "fizz";
+			}
+			if (i % 5 == 0) {
+				s += "buzz";
+			}
+			System.out.println(s);
+		}
 	}
 }
