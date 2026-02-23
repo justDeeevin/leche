@@ -1,527 +1,333 @@
-mod attributes;
+mod raw;
 
-use attributes::{ClassAttribute, FieldAttribute, MethodAttribute};
+use crate::descriptors::{FieldDescriptor, MethodDescriptor};
 use bitflags::bitflags;
-use leche_parse::Parsed;
-use std::{io::Read, rc::Rc};
+use std::{ops::Range, rc::Rc};
 
-type u1 = u8;
-type u2 = u16;
-type u4 = u32;
+pub use raw::{
+    ClassAccessFlags as ClassFlags,
+    attributes::{
+        FieldTypeAnnotationTarget, LineNumber, MethodTypeAnnotationTarget, TypePathElement,
+    },
+};
 
-const MAGIC_NUMBER: u4 = 0xCAFEBABE;
-
-const fn minus_one(i: usize) -> usize {
-    i - 1
-}
-
-#[derive(Debug)]
 pub struct ClassFile {
-    pub minor_version: u2,
-    pub major_version: u2,
-    pub constant_pool: Rc<[cp_info]>,
-    pub access_flags: ClassAccessFlags,
-
-    /// Index into the constant pool at which a [`cp_info::Class`] is found representing this class.
-    pub this_class: usize,
-
-    /// Index into the constant pool at which a [`cp_info::Class`] is found representing the direct
-    /// superclass of this class.
-    ///
-    /// **This will only be unset if this class represents `Object`.**
-    ///
-    /// For interfaces, this must point to the `Object` class.
-    pub super_class: Option<usize>,
-
-    /// Indices into the constant pool at which [`cp_info::Class`]es are found representing the
-    /// interfaces implemented by this class.
-    pub interfaces: Rc<[usize]>,
-    pub fields: Rc<[field_info]>,
-    pub methods: Rc<[method_info]>,
-    pub attributes: Rc<[ClassAttribute]>,
+    pub major_version: u16,
+    pub minor_version: u16,
+    pub constants: Rc<[Constant]>,
+    pub flags: ClassFlags,
+    pub this: Rc<str>,
+    pub superclass: Option<Rc<str>>,
+    pub interfaces: Rc<[Rc<str>]>,
+    pub fields: Rc<[Field]>,
+    pub methods: Rc<[Method]>,
+    pub source_file: Option<Rc<str>>,
+    pub inner_classes: Rc<[InnerClass]>,
+    pub enclosing_method: Option<EnclosingMethod>,
+    pub source_debug_extension: Option<Rc<str>>,
+    pub bootstrap_methods: Rc<[BootstrapMethod]>,
+    pub module: Option<Module>,
+    pub module_packages: Rc<[Rc<str>]>,
+    pub module_main_class: Option<Rc<str>>,
+    pub nest: Option<Nest>,
+    pub record: Option<Rc<[Member<FieldDescriptor, FieldTypeAnnotationTarget>]>>,
+    /// Invalid for final classes
+    pub permitted_subclasses: Option<Rc<[Rc<str>]>>,
 }
 
-impl Parsed for ClassFile {
-    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
-
-        if u4::parse(reader)? != MAGIC_NUMBER {
-            return Err(Error::new(ErrorKind::InvalidData, "invalid magic number"));
-        }
-
-        let minor_version = u2::parse(reader)?;
-
-        let major_version = u2::parse(reader)?;
-
-        if !(45..=69).contains(&major_version) {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("unsupported major version: {major_version}"),
-            ));
-        }
-
-        if major_version >= 56 && minor_version != 0 && minor_version != u2::MAX {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid minor version: {minor_version}"),
-            ));
-        }
-
-        let constant_pool = (0..(u2::parse(reader)? - 1))
-            .flat_map(|_| cp_info::parse(reader))
-            .collect::<Result<Rc<_>, _>>()?;
-
-        let access_flags = ClassAccessFlags::parse(reader)?;
-
-        let this_class = usize::parse(reader)? - 1;
-
-        let super_class = Option::parse(reader)?.map(minus_one);
-
-        let interfaces = (0..u2::parse(reader)?)
-            .map(|_| usize::parse(reader).map(minus_one))
-            .collect::<Result<_, _>>()?;
-
-        let fields = (0..u2::parse(reader)?)
-            .map(|_| field_info::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        let methods = (0..u2::parse(reader)?)
-            .map(|_| method_info::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        let attributes = (0..u2::parse(reader)?)
-            .map(|_| ClassAttribute::parse(reader, &constant_pool))
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            minor_version,
-            major_version,
-            constant_pool,
-            access_flags,
-            this_class,
-            super_class,
-            interfaces,
-            fields,
-            methods,
-            attributes,
-        })
-    }
+pub enum Nest {
+    Host(Rc<str>),
+    Members(Rc<[Rc<str>]>),
 }
 
-impl ClassFile {
-    fn uses_preview_features(&self) -> bool {
-        self.minor_version == u2::MAX
-    }
-
-    fn is_constant_valid(&self, constant: cp_info) -> bool {
-        use cp_info::*;
-
-        match constant {
-            Utf8 { .. }
-            | Integer { .. }
-            | Float { .. }
-            | Long { .. }
-            | Double { .. }
-            | Class { .. }
-            | String { .. }
-            | Fieldref { .. }
-            | Methodref { .. }
-            | InterfaceMethodref { .. }
-            | NameAndType { .. } => self.major_version > 45 || self.minor_version >= 3,
-            MethodHandle { .. } | MethodType { .. } | InvokeDynamic { .. } => {
-                self.major_version >= 51
-            }
-            Module { .. } | Package { .. } => self.major_version >= 53,
-            Dynamic { .. } => self.major_version >= 55,
-            SecondHalf => true,
-        }
-    }
-
-    fn is_constant_loadable(&self, constant: cp_info) -> bool {
-        use cp_info::*;
-
-        match constant {
-            Integer { .. }
-            | Float { .. }
-            | Long { .. }
-            | Double { .. }
-            | String { .. }
-            | MethodHandle { .. }
-            | MethodType { .. }
-            | Dynamic { .. } => true,
-            Class { .. } => self.major_version >= 49,
-            _ => false,
-        }
-    }
+pub struct Module {
+    pub name: Rc<str>,
+    pub flags: ParameterFlags,
+    pub module_version: Option<Rc<str>>,
+    pub requires: Rc<[Require]>,
+    pub exports: Rc<[Export]>,
+    pub opens: Rc<[Export]>,
+    pub uses: Rc<[Rc<str>]>,
+    pub provides: Rc<[Provide]>,
 }
 
-#[derive(Debug, Clone, Copy, Parsed)]
-#[bitflags]
-pub struct ClassAccessFlags(u2);
+pub struct Provide {
+    pub class: Rc<str>,
+    pub provides_with: Rc<[Rc<str>]>,
+}
+
+pub struct Export {
+    pub name: Rc<str>,
+    pub flags: ExportFlags,
+    pub exports_to: Rc<[Rc<str>]>,
+}
 
 bitflags! {
-    impl ClassAccessFlags: u2 {
-        /// Declared public; may be accessed from outside its package.
-        const ACC_PUBLIC = 0x0001;
-
-        /// Declared final; no subclasses allowed.
-        ///
-        /// Conflicts with `ACC_ABSTRACT`.
-        const ACC_FINAL = 0x0010;
-
-        // TODO: link this instruction
-        /// Treat superclass methods specially when invoked by the `invokespecial` instruction.
-        const ACC_SUPER = 0x0020;
-
-        /// Is an interface, not a class.
-        ///
-        /// Requires `ACC_ABSTRACT`.
-        ///
-        /// Conflicts with:
-        /// - `ACC_FINAL`
-        /// - `ACC_SUPER`
-        /// - `ACC_ENUM`
-        /// - `ACC_MODULE`
-        const ACC_INTERFACE = 0x0200;
-
-        /// Declared abstract; must not be instantiated.
-        ///
-        /// Conflicts with `ACC_FINAL`.
-        const ACC_ABSTRACT = 0x0400;
-
-        /// Declared synthetic; not present in the source code.
-        const ACC_SYNTHETIC = 0x1000;
-
-        /// Declared as an annotation interface.
-        ///
-        /// Requires `ACC_INTERFACE`.
-        const ACC_ANNOTATION = 0x2000;
-
-        /// Declared as an enum class.
-        const ACC_ENUM = 0x4000;
-
-        /// Is a module, not a class or interface.
-        const ACC_MODULE = 0x8000;
+    pub struct ExportFlags: u8 {
+        const SYNTHETIC = 1 << 0;
+        const MANDATED = 1 << 1;
     }
 }
 
-#[derive(Debug)]
-pub enum cp_info {
-    Utf8(Rc<str>),
-    Integer(u32),
+pub struct Require {
+    pub name: Rc<str>,
+    pub flags: RequireFlags,
+    pub version: Option<Rc<str>>,
+}
+
+bitflags! {
+    pub struct RequireFlags: u8 {
+        const TRANSITIVE = 1 << 0;
+        const STATIC_PHASE = 1 << 1;
+        const SYNTHETIC = 1 << 2;
+        const MANDATED = 1 << 3;
+    }
+}
+
+pub struct BootstrapMethod {
+    pub method: Ref<MethodDescriptor>,
+    pub arguments: Rc<[Constant]>,
+}
+
+pub struct Ref<Descriptor> {
+    pub class: Rc<str>,
+    pub name_and_type: NameAndType<Descriptor>,
+}
+
+pub struct EnclosingMethod {
+    pub class: Rc<str>,
+    pub method: Option<NameAndType<MethodDescriptor>>,
+}
+
+pub struct NameAndType<Descriptor> {
+    pub name: Rc<str>,
+    pub descriptor: Descriptor,
+}
+
+pub struct InnerClass {
+    pub inner_class: Rc<str>,
+    pub visibility: Visibility,
+    pub outer_class: Option<Rc<str>>,
+    pub inner_name: Option<Rc<str>>,
+    pub flags: InnerClassFlags,
+}
+
+bitflags! {
+    pub struct InnerClassFlags: u8 {
+        const STATIC = 1 << 0;
+        const FINAL = 1 << 1;
+        const INTERFACE = 1 << 2;
+        const ABSTRACT = 1 << 3;
+        const SYNTHETIC = 1 << 4;
+        const ANNOTATION = 1 << 5;
+        const ENUM = 1 << 6;
+    }
+}
+
+pub enum Constant {
+    String(Rc<str>),
+    Int(u32),
     Float(f32),
     Long(u64),
     Double(f64),
-    /// Used to denote the unusable second half of a two-word value (long or double)
-    SecondHalf,
-    Class {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a
-        /// valid binary class or interface name.
-        name_index: usize,
+    // TODO: other constant variants...
+}
+
+pub struct Member<Descriptor, TypeAnnotationTarget> {
+    pub name: Rc<str>,
+    pub visibility: Visibility,
+    pub descriptor: Descriptor,
+    pub signature: Option<Rc<str>>,
+    pub runtime_visible_annotations: Rc<[Annotation]>,
+    pub runtime_invisible_annotations: Rc<[Annotation]>,
+    pub runtime_visible_type_annotations: Rc<[TypeAnnotation<TypeAnnotationTarget>]>,
+    pub runtime_invisible_type_annotations: Rc<[TypeAnnotation<TypeAnnotationTarget>]>,
+    pub attributes: Rc<[Rc<str>]>,
+}
+
+pub enum Mutability {
+    Final,
+    Mutable,
+    Volatile,
+}
+
+pub struct TypeAnnotation<Target> {
+    pub target: Target,
+    pub target_path: Rc<[TypePathElement]>,
+}
+
+pub struct Annotation {
+    pub descriptor: FieldDescriptor,
+    pub element_value_pairs: Rc<[ElementValuePair]>,
+}
+
+pub struct ElementValuePair {
+    pub name: Rc<str>,
+    pub value: ElementValue,
+}
+
+pub enum ElementValue {
+    Byte(u8),
+    Char(u8),
+    Double(f64),
+    Float(f32),
+    int(i32),
+    Long(i64),
+    Short(i16),
+    String(Rc<str>),
+    Enum {
+        descriptor: FieldDescriptor,
+        name: Rc<str>,
     },
-    String {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found containing the
-        /// string's value.
-        string_index: usize,
-    },
-
-    /// `name_and_type_index` must point to a field descriptor.
-    Fieldref(RefInfo),
-
-    /// `name_and_type_index` must point to a method descriptor.
-    /// If the descriptor starts with '<', then it **must** be the special name `<init>`, an
-    /// instance initialization method returning void.
-    Methodref(RefInfo),
-
-    /// `name_and_type_index` must point to a method descriptor.
-    InterfaceMethodref(RefInfo),
-    NameAndType {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing an
-        /// unqualified field or method name or the special method name `<init>`.
-        name_index: usize,
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a field
-        /// or method descriptor.
-        descriptor_index: usize,
-    },
-    MethodHandle {
-        reference_kind: ReferenceKind,
-        /// Index into the constant pool at which the reference is found. The kind of reference
-        /// must be valid for `reference_kind`. See [`ReferenceKind`] for details.
-        reference_index: usize,
-    },
-    MethodType {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a
-        /// method descriptor.
-        descriptor_index: usize,
-    },
-
-    // TODO: link these instructions
-    /// A dynamically-computed constant, an arbitrary value that is produced by the invocation of
-    /// a bootstrap method in the course of an `ldc` instruction, among others.
-    Dynamic(DynamicInfo),
-
-    /// A dynamically-computed callsite, a callsite that is produced by the invocation of a
-    /// bootstrap method in the course of an `invokedynamic` instruction.
-    InvokeDynamic(DynamicInfo),
-
-    /// Only permitted in a class file that declares a module; that is, `access_flags` has
-    /// `ACC_MODULE` set.
-    Module {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a
-        /// module name.
-        name_index: usize,
-    },
-
-    /// Only permitted in a class file that declares a module; that is, `access_flags` has
-    /// `ACC_MODULE` set.
-    Package {
-        /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing a
-        /// package name.
-        name_index: usize,
-    },
+    Class(Option<FieldDescriptor>),
+    Annotation(Annotation),
+    Array(Rc<[Self]>),
 }
 
-impl cp_info {
-    pub fn parse(reader: &mut impl Read) -> OneOrTwo<std::io::Result<Self>> {
-        match Self::parse_inner(reader) {
-            Ok(OneOrTwo::One(value)) => OneOrTwo::One(Ok(value)),
-            Ok(OneOrTwo::Two(value1, value2)) => OneOrTwo::Two(Ok(value1), Ok(value2)),
-            Err(err) => OneOrTwo::One(Err(err)),
-        }
-    }
-
-    fn parse_inner(reader: &mut impl Read) -> std::io::Result<OneOrTwo<Self>> {
-        use std::io::{Error, ErrorKind};
-
-        match u1::parse(reader)? {
-            1 => {
-                let len = usize::parse(reader)?;
-                Ok(OneOrTwo::One(Self::Utf8(
-                    std::io::read_to_string((reader).take(len as u64))?.into(),
-                )))
-            }
-            3 => Ok(OneOrTwo::One(Self::Integer(u32::parse(reader)?))),
-            4 => Ok(OneOrTwo::One(Self::Float(f32::parse(reader)?))),
-            // TODO: test 8-byte parsing
-            5 => Ok(OneOrTwo::Two(
-                Self::Long(u64::parse(reader)?),
-                Self::SecondHalf,
-            )),
-            6 => Ok(OneOrTwo::Two(
-                Self::Double(f64::parse(reader)?),
-                Self::SecondHalf,
-            )),
-            7 => Ok(OneOrTwo::One(Self::Class {
-                name_index: usize::parse(reader)? - 1,
-            })),
-            8 => Ok(OneOrTwo::One(Self::String {
-                string_index: usize::parse(reader)? - 1,
-            })),
-            9 => Ok(OneOrTwo::One(Self::Fieldref(RefInfo::parse(reader)?))),
-            10 => Ok(OneOrTwo::One(Self::Methodref(RefInfo::parse(reader)?))),
-            11 => Ok(OneOrTwo::One(Self::InterfaceMethodref(RefInfo::parse(
-                reader,
-            )?))),
-            12 => Ok(OneOrTwo::One(Self::NameAndType {
-                name_index: usize::parse(reader)? - 1,
-                descriptor_index: usize::parse(reader)? - 1,
-            })),
-            15 => Ok(OneOrTwo::One(Self::MethodHandle {
-                reference_kind: ReferenceKind::parse(reader)?,
-                reference_index: usize::parse(reader)? - 1,
-            })),
-            16 => Ok(OneOrTwo::One(Self::MethodType {
-                descriptor_index: usize::parse(reader)? - 1,
-            })),
-            17 => Ok(OneOrTwo::One(Self::Dynamic(DynamicInfo::parse(reader)?))),
-            18 => Ok(OneOrTwo::One(Self::InvokeDynamic(DynamicInfo::parse(
-                reader,
-            )?))),
-            19 => Ok(OneOrTwo::One(Self::Module {
-                name_index: usize::parse(reader)? - 1,
-            })),
-            20 => Ok(OneOrTwo::One(Self::Package {
-                name_index: usize::parse(reader)? - 1,
-            })),
-            tag => Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid constant tag: {tag}"),
-            )),
-        }
-    }
+pub enum Visibility {
+    Private,
+    Protected,
+    Public,
 }
 
-#[derive(Debug)]
-pub enum OneOrTwo<T> {
-    One(T),
-    Two(T, T),
+pub struct Method {
+    pub member: Member<MethodDescriptor, MethodTypeAnnotationTarget>,
+    pub code: Option<Code>,
+    pub throws: Rc<[Rc<str>]>,
+    pub runtime_visible_parameter_annotations: Rc<[Annotation]>,
+    pub runtime_invisible_parameter_annotations: Rc<[Annotation]>,
+    pub annotation_default: Option<ElementValue>,
+    pub parameters: Rc<[Parameter]>,
 }
 
-impl<T> IntoIterator for OneOrTwo<T> {
-    type Item = T;
-    type IntoIter = OneOrTwoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let i = 0;
-
-        match self {
-            OneOrTwo::One(value) => OneOrTwoIter {
-                i,
-                value: OneOrTwo::One(Some(value)),
-            },
-            OneOrTwo::Two(value1, value2) => OneOrTwoIter {
-                i,
-                value: OneOrTwo::Two(Some(value1), Some(value2)),
-            },
-        }
-    }
+pub struct Parameter {
+    pub name: Rc<str>,
+    pub flags: ParameterFlags,
 }
-
-pub struct OneOrTwoIter<T> {
-    i: u8,
-    value: OneOrTwo<Option<T>>,
-}
-
-impl<T> Iterator for OneOrTwoIter<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.value {
-            OneOrTwo::One(value) => {
-                if self.i == 0 {
-                    self.i += 1;
-                    value.take()
-                } else {
-                    None
-                }
-            }
-            OneOrTwo::Two(value1, value2) => {
-                if self.i == 0 {
-                    self.i += 1;
-                    value1.take()
-                } else if self.i == 1 {
-                    self.i += 1;
-                    value2.take()
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
-/// Valid constants for each kind:
-/// - `GetField`, `GetStatic`, `PutField`, `PutStatic`: [`cp_info::Fieldref`]
-/// - `InvokeVirtual`, `NewInvokeSpecial`: [`cp_info::Methodref`]
-/// - `InvokeStatic`, `InvokeSpecial`: [`cp_info::Methodref`]. **For ^v52.0**, either [`cp_info::Methodref`] or [`cp_info::InterfaceMethodref`]
-/// - `InvokeInterface`: [`cp_info::InterfaceMethodref`]
-///
-/// For `InvokeVirtual`, `InvokeStatic`, `InvokeSpecial`, and `InvokeInterface`, the name of the
-/// method must not be `<init>` or `<clinit>`.
-///
-/// For `NewInvokeSpecial`, the name of the method must be `<init>`.
-#[derive(Debug, Parsed)]
-#[repr(u8)]
-pub enum ReferenceKind {
-    GetField = 1,
-    GetStatic,
-    PutField,
-    PutStatic,
-    InvokeVirtual,
-    InvokeStatic,
-    InvokeSpecial,
-    NewInvokeSpecial,
-    InvokeInterface,
-}
-
-#[derive(Debug, Parsed)]
-pub struct RefInfo {
-    /// Index into the constant pool at which a [`cp_info::Class`] is found representing a class or
-    /// interface type of which the reference is a member.
-    #[map(minus_one)]
-    pub class_index: usize,
-    /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
-    /// name and descriptor of the reference.
-    #[map(minus_one)]
-    pub name_and_type_index: usize,
-}
-
-#[derive(Debug, Parsed)]
-pub struct DynamicInfo {
-    /// Index into the `bootstrap_methods` array of the bootstrap method table of this class file.
-    ///
-    /// This can be used for self-reference, which will cause a failure at the time of resolution.
-    pub bootstrap_method_attr_index: usize,
-    /// Index into the constant pool at which a [`cp_info::NameAndType`] is found representing the
-    /// name and descriptor of the method.
-    #[map(minus_one)]
-    pub name_and_type_index: usize,
-}
-
-trait ParsedWithString: Sized {
-    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self>;
-}
-
-#[derive(Debug)]
-pub struct member_info<AccessFlags, Attributes> {
-    pub access_flags: AccessFlags,
-    pub name_index: usize,
-    pub descriptor_index: usize,
-    pub attributes: Rc<[Attributes]>,
-}
-
-impl<F: Parsed, A: ParsedWithString> ParsedWithString for member_info<F, A> {
-    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
-        Ok(Self {
-            access_flags: Parsed::parse(reader)?,
-            name_index: usize::parse(reader)? - 1,
-            descriptor_index: usize::parse(reader)? - 1,
-            attributes: (0..u2::parse(reader)?)
-                .map(|_| A::parse(reader, constant_pool))
-                .collect::<Result<_, _>>()?,
-        })
-    }
-}
-
-pub type field_info = member_info<MemberAccessFlags, FieldAttribute>;
-pub type method_info = member_info<MethodAccessFlags, MethodAttribute>;
-
-#[derive(Debug, Parsed)]
-pub struct MethodAccessFlags(u2);
 
 bitflags! {
-    impl MethodAccessFlags: u2 {
-        const ACC_PUBLIC = 0x0001;
-        const ACC_PRIVATE = 0x0002;
-        const ACC_PROTECTED = 0x0004;
-        const ACC_STATIC = 0x0008;
-        const ACC_FINAL = 0x0010;
-        const ACC_SYNCHRONIZED = 0x0020;
-        const ACC_BRIDGE = 0x0040;
-        const ACC_VARARGS = 0x0080;
-        const ACC_NATIVE = 0x0100;
-        const ACC_ABSTRACT = 0x0400;
-        const ACC_STRICT = 0x0800;
-        const ACC_SYNTHETIC = 0x1000;
+    pub struct ParameterFlags: u8 {
+        const FINAL = 1 << 0;
+        const SYNTHETIC = 1 << 1;
+        const MANDATED = 1 << 2;
     }
 }
 
-#[derive(Debug, Parsed)]
-#[bitflags]
-pub struct MemberAccessFlags(u2);
+pub struct Code {
+    pub max_stack: u16,
+    pub max_locals: u16,
+    pub code: Rc<[u8]>,
+    pub exception_handlers: Rc<[ExceptionHandler]>,
+    pub stack_map_frames: Rc<[StackMapFrame]>,
+    pub line_numbers: Rc<[LineNumber]>,
+    pub local_variables: Rc<[LocalVariable]>,
+    pub local_variable_types: Rc<[LocalVariableType]>,
+    pub attributes: Rc<[Rc<str>]>,
+}
+
+pub struct LocalVariableType {
+    pub scope: Range<usize>,
+    pub name: Rc<str>,
+    pub descriptor: FieldDescriptor,
+    pub variable_index: usize,
+}
+
+pub struct LocalVariable {
+    pub scope: Range<usize>,
+    pub name: Rc<str>,
+    pub descriptor: FieldDescriptor,
+    pub variable_index: usize,
+}
+
+pub struct StackMapFrame {
+    pub offset_delta: u16,
+    pub info: StackMapFrameInfo,
+}
+
+pub enum StackMapFrameInfo {
+    Same,
+    SameLocals1StackItem {
+        stack: VerificationTypeInfo,
+    },
+    Chop {
+        removed: u8,
+    },
+    Append {
+        locals: Rc<[VerificationTypeInfo]>,
+    },
+    Full {
+        locals: Rc<[VerificationTypeInfo]>,
+        stack: Rc<[VerificationTypeInfo]>,
+    },
+}
+
+pub enum VerificationTypeInfo {
+    Top,
+    Integer,
+    Float,
+    Double,
+    Long,
+    Null,
+    UninitializedThis,
+    Object(Rc<str>),
+    Uninitialized { offset: usize },
+}
+
+pub struct ExceptionHandler {
+    pub active: Range<usize>,
+    pub handler_pc: usize,
+    pub catch_type: Option<Rc<str>>,
+}
+
+// TODO: make sure none of these conflict
+bitflags! {
+    pub struct MethodFlags: u16 {
+        const STATIC = 1 << 0;
+        const FINAL = 1 << 1;
+        const SYNCHRONIZED = 1 << 2;
+        const BRIDGE = 1 << 3;
+        const VARARGS = 1 << 4;
+        const NATIVE = 1 << 5;
+        const ABSTRACT = 1 << 6;
+        const STRICT = 1 << 7;
+        const SYNTHETIC = 1 << 8;
+    }
+}
+
+pub struct Field {
+    pub member: Member<FieldDescriptor, FieldTypeAnnotationTarget>,
+    pub flags: FieldFlags,
+    pub constant_value: Option<Rc<Constant>>,
+}
+
+impl Field {
+    pub fn is_static(&self) -> bool {
+        self.flags.contains(FieldFlags::STATIC)
+    }
+
+    pub fn is_transient(&self) -> bool {
+        self.flags.contains(FieldFlags::TRANSIENT)
+    }
+
+    pub fn is_synthetic(&self) -> bool {
+        self.flags.contains(FieldFlags::SYNTHETIC)
+    }
+
+    pub fn is_enum(&self) -> bool {
+        self.flags.contains(FieldFlags::ENUM)
+    }
+
+    pub fn is_deprecated(&self) -> bool {
+        self.flags.contains(FieldFlags::DEPRECATED)
+    }
+}
 
 bitflags! {
-    impl MemberAccessFlags: u2 {
-        const ACC_PUBLIC = 0x0001;
-        const ACC_PRIVATE = 0x0002;
-        const ACC_PROTECTED = 0x0004;
-        const ACC_STATIC = 0x0008;
-        /// Conflicts with `ACC_VOLATILE`
-        const ACC_FINAL = 0x0010;
-        /// Conflicts with `ACC_FINAL`
-        const ACC_VOLATILE = 0x0040;
-        const ACC_TRANSIENT = 0x0080;
-        const ACC_SYNTHETIC = 0x1000;
-        const ACC_ENUM = 0x4000;
+    pub struct FieldFlags: u8 {
+        const STATIC = 1 << 0;
+        const TRANSIENT = 1 << 1;
+        const SYNTHETIC = 1 << 2;
+        const ENUM = 1 << 3;
+        const DEPRECATED = 1 << 4;
     }
 }

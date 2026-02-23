@@ -274,8 +274,8 @@ pub enum ClassAttribute {
 
     /// Lists inner classes.
     ///
-    /// Each [`cp_info::Class`] in the constant pool must have one corresponding entry in the
-    /// inner classes table.
+    /// Each [`cp_info::Class`] in the constant pool not belonging to a package must have one
+    /// corresponding entry in the inner classes table.
     InnerClasses(Rc<[InnerClass]>),
 
     /// A class can only have an `EnclosingMethod` if it represents a local or anonymous class.
@@ -403,7 +403,6 @@ pub struct ModuleAttribute {
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the name of
     /// the current module.
     pub module_name_index: usize,
-    // TODO: bitflags
     pub module_flags: ParameterAccessFlags,
     #[map(|o| o.map(minus_one))]
     /// Index into the constant pool at which a [`cp_info::Utf8`] is found representing the
@@ -788,7 +787,6 @@ pub struct LocalVariableType {
 pub struct LineNumber {
     /// Index of the first instruction of the line in the code array.
     pub start_pc: usize,
-    // TODO: should this be usize?
     pub line_number: u2,
 }
 
