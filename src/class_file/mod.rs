@@ -6,6 +6,7 @@ use crate::{
         FieldDescriptor, MethodDescriptor, parse_field_descriptor, parse_method_descriptor,
         parse_return_descriptor,
     },
+    instruction::Instruction,
 };
 use bitflags::bitflags;
 use leche_parse::Parsed;
@@ -20,7 +21,7 @@ use raw::{
 };
 use regex::Regex;
 use std::{
-    io::{Error, ErrorKind, Read},
+    io::{Error, ErrorKind},
     ops::Range,
     rc::Rc,
 };
@@ -62,7 +63,7 @@ pub struct ClassFile {
 }
 
 impl ClassFile {
-    pub fn new(mut input: impl Read) -> std::io::Result<Self> {
+    pub fn new(mut input: impl leche_parse::ParseRead) -> std::io::Result<Self> {
         let raw @ raw::ClassFile {
             major_version,
             minor_version,
@@ -764,7 +765,7 @@ impl ClassFile {
         raw: &raw::ClassFile,
         max_stack: u16,
         max_locals: u16,
-        code: &Rc<[u8]>,
+        code: &Rc<[Instruction]>,
         exception_table: &Rc<[raw::attributes::ExceptionHandler]>,
         attributes: &Rc<[CodeAttribute]>,
     ) -> std::io::Result<Code> {
@@ -1644,7 +1645,7 @@ impl From<ParameterAccessFlags> for ParameterFlags {
 pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Rc<[u8]>,
+    pub code: Rc<[Instruction]>,
     pub exception_handlers: Rc<[ExceptionHandler]>,
     pub stack_map_frames: Rc<[StackMapFrame]>,
     pub line_numbers: Rc<[LineNumber]>,

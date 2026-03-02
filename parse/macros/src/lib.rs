@@ -81,7 +81,7 @@ pub fn parsed(input: TokenStream) -> TokenStream {
            where
                #(#where_clause,)*
         {
-            fn parse(reader: &mut impl ::std::io::Read) -> ::std::io::Result<Self> {
+            fn parse(reader: &mut impl ::leche_parse::ParseRead) -> ::std::io::Result<Self> {
                 #body
             }
         }
@@ -138,7 +138,7 @@ fn derive_unnamed_fields(fields: &FieldsUnnamed, parent: Path) -> Result<TokenSt
     Ok(quote! {
         Ok(#parent(#(
             <#types as ::leche_parse::Parsed>::parse(reader)#maps?,
-        ),*))
+        )*))
     }
     .into())
 }
