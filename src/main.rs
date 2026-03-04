@@ -3,6 +3,8 @@
 #[allow(non_camel_case_types)]
 mod class_file;
 mod descriptors;
+#[allow(non_upper_case_globals)]
+mod instruction;
 
 use class_file::ClassFile;
 use std::fs::File;
