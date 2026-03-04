@@ -2,14 +2,11 @@ pub mod attributes;
 
 use attributes::{ClassAttribute, FieldAttribute, MethodAttribute};
 use bitflags::bitflags;
-use leche_parse::{ParseRead, Parsed};
+use leche_parse::Parsed;
 use std::{
     io::{Error, ErrorKind, Read},
     rc::Rc,
 };
-
-#[cfg(doc)]
-use crate::instruction::Instruction::*;
 
 type u1 = u8;
 type u2 = u16;
@@ -48,7 +45,7 @@ pub struct ClassFile {
 }
 
 impl Parsed for ClassFile {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         use std::io::{Error, ErrorKind};
 
         if u4::parse(reader)? != MAGIC_NUMBER {
@@ -286,8 +283,8 @@ bitflags! {
         /// Conflicts with `ACC_ABSTRACT`.
         const ACC_FINAL = 0x0010;
 
-        /// Treat superclass methods specially when invoked by the
-        /// [`invokespecial`] instruction.
+        // TODO: link this instruction
+        /// Treat superclass methods specially when invoked by the `invokespecial` instruction.
         const ACC_SUPER = 0x0020;
 
         /// Is an interface, not a class.
@@ -372,12 +369,13 @@ pub enum cp_info {
         descriptor_index: usize,
     },
 
+    // TODO: link these instructions
     /// A dynamically-computed constant, an arbitrary value that is produced by the invocation of
-    /// a bootstrap method in the course of an [`ldc`] instruction, among others.
+    /// a bootstrap method in the course of an `ldc` instruction, among others.
     Dynamic(DynamicInfo),
 
     /// A dynamically-computed callsite, a callsite that is produced by the invocation of a
-    /// bootstrap method in the course of an [`invokedynamic`] instruction.
+    /// bootstrap method in the course of an `invokedynamic` instruction.
     InvokeDynamic(DynamicInfo),
 
     /// Only permitted in a class file that declares a module; that is, `access_flags` has
@@ -398,7 +396,7 @@ pub enum cp_info {
 }
 
 impl cp_info {
-    pub fn parse(reader: &mut impl ParseRead) -> OneOrTwo<std::io::Result<Self>> {
+    pub fn parse(reader: &mut impl Read) -> OneOrTwo<std::io::Result<Self>> {
         match Self::parse_inner(reader) {
             Ok(OneOrTwo::One(value)) => OneOrTwo::One(Ok(value)),
             Ok(OneOrTwo::Two(value1, value2)) => OneOrTwo::Two(Ok(value1), Ok(value2)),
@@ -406,7 +404,7 @@ impl cp_info {
         }
     }
 
-    fn parse_inner(reader: &mut impl ParseRead) -> std::io::Result<OneOrTwo<Self>> {
+    fn parse_inner(reader: &mut impl Read) -> std::io::Result<OneOrTwo<Self>> {
         use std::io::{Error, ErrorKind};
 
         match u1::parse(reader)? {
@@ -575,7 +573,7 @@ pub struct DynamicInfo {
 }
 
 trait ParsedWithString: Sized {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self>;
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self>;
 }
 
 #[derive(Debug)]
@@ -587,7 +585,7 @@ pub struct member_info<AccessFlags, Attributes> {
 }
 
 impl<F: Parsed, A: ParsedWithString> ParsedWithString for member_info<F, A> {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         Ok(Self {
             access_flags: Parsed::parse(reader)?,
             name_index: usize::parse(reader)? - 1,

@@ -1,34 +1,18 @@
 use cfg_if::cfg_if;
 use num_traits::Zero;
+use std::io::Read;
 
 pub use leche_parse_macros::Parsed;
 
 pub trait Parsed: Sized {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self>;
-}
-
-pub trait ParseRead: std::io::Read {
-    /// Offset of the next fed byte from start of current code array, if within one.
-    fn code_offset(&self) -> Option<usize>;
-}
-
-impl ParseRead for std::fs::File {
-    fn code_offset(&self) -> Option<usize> {
-        None
-    }
-}
-
-impl ParseRead for std::io::Stdin {
-    fn code_offset(&self) -> Option<usize> {
-        None
-    }
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self>;
 }
 
 macro_rules! impl_parsed {
     ($($ty:ty: $size:literal),* $(,)?) => {
         $(
             impl Parsed for $ty {
-                fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+                fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
                     let mut buf = [0; ::std::mem::size_of::<Self>()];
                     reader.read_exact(&mut buf)?;
                     Ok(Self::from_be_bytes(buf))
@@ -41,7 +25,7 @@ macro_rules! impl_parsed {
 impl_parsed!(i8: 1, i16: 2, i32: 4, i64: 8, i128: 16, u8: 1, u16: 2, u32: 4, u64: 8, u128: 16, f32: 4, f64: 8);
 
 impl Parsed for usize {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         Ok(u16::parse(reader)? as usize)
     }
 }
@@ -57,7 +41,7 @@ cfg_if! {
 }
 
 impl Parsed for Option<usize> {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         match usize::parse(reader)? {
             0 => Ok(None),
             n => Ok(Some(n)),
@@ -66,13 +50,13 @@ impl Parsed for Option<usize> {
 }
 
 impl<T: Parsed> Parsed for std::ops::Range<T> {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         Ok(T::parse(reader)?..T::parse(reader)?)
     }
 }
 
 impl<T: Parsed> Parsed for std::rc::Rc<[T]> {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         (0..usize::parse(reader)?)
             .map(|_| T::parse(reader))
             .collect()
@@ -80,13 +64,13 @@ impl<T: Parsed> Parsed for std::rc::Rc<[T]> {
 }
 
 impl Parsed for () {
-    fn parse(_: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(_: &mut impl Read) -> std::io::Result<Self> {
         Ok(())
     }
 }
 
 pub fn collect_with_len_type<L: Parsed + Zero, T: Parsed, C: FromIterator<T>>(
-    reader: &mut impl ParseRead,
+    reader: &mut impl Read,
 ) -> std::io::Result<C>
 where
     std::ops::Range<L>: Iterator<Item = L>,

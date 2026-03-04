@@ -1,15 +1,11 @@
 use super::{Parsed, ParsedWithString, cp_info, member_info, minus_one, u1, u2, u4};
-use crate::instruction::Instruction;
 use bitflags::bitflags;
-use leche_parse::{ParseRead, collect_with_len_type};
+use leche_parse::collect_with_len_type;
 use std::{
     io::{Error, ErrorKind, Read},
     ops::Range,
     rc::Rc,
 };
-
-#[cfg(doc)]
-use crate::instruction::Instruction::*;
 
 fn get_constant_string(constant_pool: &[cp_info], index: usize) -> std::io::Result<&Rc<str>> {
     match constant_pool.get(index).ok_or_else(|| {
@@ -55,7 +51,7 @@ pub enum MemberAttribute<TypeAnnotationTarget> {
 }
 
 impl<T: Parsed> ParsedWithString for MemberAttribute<T> {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let attribute_length = u4::parse(reader)?;
@@ -99,7 +95,7 @@ pub struct type_annotation<Target> {
 pub struct type_path(pub Rc<[TypePathElement]>);
 
 impl Parsed for type_path {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         Ok(Self(collect_with_len_type::<u1, _, _>(reader)?))
     }
 }
@@ -212,7 +208,7 @@ pub enum supertype_target {
 }
 
 impl Parsed for supertype_target {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let value = u2::parse(reader)?;
         Ok(if value == u2::MAX {
             Self::Superclass
@@ -370,7 +366,7 @@ fn verify_attribute_length(expected: u4, actual: u4, name: &str) -> std::io::Res
 }
 
 impl ParsedWithString for ClassAttribute {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let attribute_length = u4::parse(reader)?;
@@ -461,7 +457,7 @@ pub struct Provide {
 }
 
 impl Parsed for Provide {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let provides_index = usize::parse(reader)? - 1;
         let provides_with_index = (0..u2::parse(reader)?)
             .map(|_| usize::parse(reader).map(minus_one))
@@ -478,7 +474,7 @@ impl Parsed for Provide {
 pub struct UsesIndex(pub Rc<[usize]>);
 
 impl Parsed for UsesIndex {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         Ok(Self(
             (0..u2::parse(reader)?)
                 .map(|_| usize::parse(reader).map(minus_one))
@@ -537,7 +533,7 @@ bitflags! {
 }
 
 impl Parsed for Export {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let exports_index = usize::parse(reader)? - 1;
         let exports_flags = Parsed::parse(reader)?;
         let exports_to_index = (0..u2::parse(reader)?)
@@ -616,7 +612,7 @@ pub enum FieldAttribute {
 }
 
 impl ParsedWithString for FieldAttribute {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let attribute_length = u4::parse(reader)?;
@@ -644,12 +640,13 @@ pub enum MethodAttribute {
         ///  The greatest local variable index for a value of any other type is max_locals - 1.
         max_locals: u2,
 
+        // TODO: probably should make an enum for bytecode
+
         // When the code array is read into memory on a byte-addressable machine, if the first byte
-        // of the array is aligned on a 4-byte boundary, the
-        // [`tableswitch`] and [`lookupswitch`] 32-bit
+        // of the array is aligned on a 4-byte boundary, the tableswitch and lookupswitch 32-bit
         // offsets will be 4-byte aligned. (Refer to the descriptions of those instructions for
         // more information on the consequences of code array alignment.)
-        code: Rc<[Instruction]>,
+        code: Rc<[u1]>,
         exception_table: Rc<[ExceptionHandler]>,
         attributes: Rc<[CodeAttribute]>,
     },
@@ -674,7 +671,7 @@ pub enum MethodAttribute {
 }
 
 impl ParsedWithString for MethodAttribute {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let _attribute_length = u4::parse(reader)?;
@@ -683,40 +680,7 @@ impl ParsedWithString for MethodAttribute {
             "Code" => Ok(Self::Code {
                 max_stack: u2::parse(reader)?,
                 max_locals: u2::parse(reader)?,
-                code: {
-                    struct CodeReader<R: Read> {
-                        pub reader: R,
-                        offset: usize,
-                    }
-
-                    impl<R: Read> Read for CodeReader<R> {
-                        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                            let read = self.reader.read(buf)?;
-                            self.offset += read;
-                            Ok(read)
-                        }
-                    }
-
-                    impl<R: Read> leche_parse::ParseRead for CodeReader<R> {
-                        fn code_offset(&self) -> Option<usize> {
-                            Some(self.offset)
-                        }
-                    }
-
-                    impl<R: Read> CodeReader<R> {
-                        pub fn new(reader: R) -> Self {
-                            Self { reader, offset: 0 }
-                        }
-                    }
-
-                    let len = u4::parse(reader)?;
-                    let mut reader = CodeReader::new(reader.take(len as u64));
-                    let mut code = Vec::with_capacity(len as usize);
-                    while reader.reader.limit() > 0 {
-                        code.push(Instruction::parse(&mut reader)?);
-                    }
-                    code.into()
-                },
+                code: collect_with_len_type::<u4, _, _>(reader)?,
                 exception_table: Parsed::parse(reader)?,
                 attributes: (0..u2::parse(reader)?)
                     .map(|_| CodeAttribute::parse(reader, constant_pool))
@@ -799,7 +763,7 @@ pub enum CodeAttribute {
 }
 
 impl ParsedWithString for CodeAttribute {
-    fn parse(reader: &mut impl ParseRead, constant_pool: &[cp_info]) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read, constant_pool: &[cp_info]) -> std::io::Result<Self> {
         let name = get_constant_string(constant_pool, usize::parse(reader)? - 1)?;
 
         let _attribute_length = u4::parse(reader)?;
@@ -860,7 +824,7 @@ pub struct stack_map_frame {
 }
 
 impl Parsed for stack_map_frame {
-    fn parse(reader: &mut impl ParseRead) -> std::io::Result<Self> {
+    fn parse(reader: &mut impl Read) -> std::io::Result<Self> {
         let tag = u1::parse(reader)?;
 
         match tag {
@@ -950,7 +914,7 @@ pub enum verification_type_info {
         cpool_index: usize,
     },
     Uninitialized {
-        /// Offset in the code array of the [`new`] instruction that created the object.
+        /// Offset in the code array of the `new` instruction that created the object.
         offset: u2,
     },
 }
