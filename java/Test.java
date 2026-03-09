@@ -1,15 +1,15 @@
 class Test {
 	public static void main(String[] args) {
-		for (int i = 1; i <= 100; i++) {
-			System.out.print(i + ": ");
-			String s = new String();
-			if (i % 3 == 0) {
-				s += "fizz";
-			}
-			if (i % 5 == 0) {
-				s += "buzz";
-			}
-			System.out.println(s);
+		int a = 1;
+		int b = 2;
+		if (args.length == 2) {
+			a = Integer.parseInt(args[0]);
+			b = Integer.parseInt(args[1]);
 		}
+		System.out.println(add(a, b));
+	}
+
+	private static int add(int a, int b) {
+		return a + b;
 	}
 }

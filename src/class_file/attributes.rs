@@ -639,13 +639,6 @@ pub enum MethodAttribute {
         ///  The greatest local variable index for a value of type long or double is max_locals - 2.
         ///  The greatest local variable index for a value of any other type is max_locals - 1.
         max_locals: u2,
-
-        // TODO: probably should make an enum for bytecode
-
-        // When the code array is read into memory on a byte-addressable machine, if the first byte
-        // of the array is aligned on a 4-byte boundary, the tableswitch and lookupswitch 32-bit
-        // offsets will be 4-byte aligned. (Refer to the descriptions of those instructions for
-        // more information on the consequences of code array alignment.)
         code: Rc<[u1]>,
         exception_table: Rc<[ExceptionHandler]>,
         attributes: Rc<[CodeAttribute]>,

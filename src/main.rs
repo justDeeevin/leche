@@ -7,18 +7,18 @@ mod descriptors;
 mod instruction;
 
 use class_file::ClassFile;
+use leche_parse::Parsed;
 use std::fs::File;
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let class = if let Some(path) = std::env::args().nth(1) {
-        ClassFile::new(File::open(path)?)?
-    } else {
-        ClassFile::new(std::io::stdin())?
+    let class_file = match std::env::args().nth(1) {
+        Some(path) => ClassFile::parse(&mut File::open(path)?)?,
+        None => ClassFile::parse(&mut std::io::stdin())?,
     };
 
-    dbg!(&class);
+    dbg!(&class_file);
 
     Ok(())
 }
